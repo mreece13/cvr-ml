@@ -5,6 +5,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from scipy import sparse
+from tqdm import tqdm
 
 def get_device():
     return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -265,62 +266,62 @@ def prepare_sparse_voter_data(raw_data, participation_mask, num_candidates_per_c
     
     return input_data, target_indices, participation_mask_tensor
 
-def voter_vae_loss(contest_probs, target_indices, participation_mask, mu, logvar, kl_weight=1.0):
-    """
-    Loss function for the voter choice VAE with variable contest participation
+# def voter_vae_loss(contest_probs, target_indices, participation_mask, mu, logvar, kl_weight=1.0):
+#     """
+#     Loss function for the voter choice VAE with variable contest participation
     
-    Parameters:
-    -----------
-    contest_probs: list of torch.Tensor
-        Predicted probabilities for each contest
-    target_indices: list of (indices, choices) tuples
-        For each contest, indices of participating voters and their choices
-    participation_mask: torch.Tensor
-        Binary mask indicating which contests each voter participated in
-    mu, logvar: torch.Tensor
-        Latent space parameters
-    kl_weight: float
-        Weight for KL divergence term
+#     Parameters:
+#     -----------
+#     contest_probs: list of torch.Tensor
+#         Predicted probabilities for each contest
+#     target_indices: list of (indices, choices) tuples
+#         For each contest, indices of participating voters and their choices
+#     participation_mask: torch.Tensor
+#         Binary mask indicating which contests each voter participated in
+#     mu, logvar: torch.Tensor
+#         Latent space parameters
+#     kl_weight: float
+#         Weight for KL divergence term
         
-    Returns:
-    --------
-    total_loss: torch.Tensor
-        Combined loss value
-    recon_loss: torch.Tensor
-        Reconstruction loss component
-    kl_loss: torch.Tensor
-        KL divergence loss component
-    """
-    # Reconstruction loss (categorical cross-entropy for each contest)
-    recon_loss = 0.0
-    total_contests = 0
+#     Returns:
+#     --------
+#     total_loss: torch.Tensor
+#         Combined loss value
+#     recon_loss: torch.Tensor
+#         Reconstruction loss component
+#     kl_loss: torch.Tensor
+#         KL divergence loss component
+#     """
+#     # Reconstruction loss (categorical cross-entropy for each contest)
+#     recon_loss = 0.0
+#     total_contests = 0
     
-    for contest_idx, ((voter_indices, targets), probs) in enumerate(zip(target_indices, contest_probs)):
-        if len(voter_indices) == 0:
-            continue  # Skip contests with no participants in this batch
+#     for contest_idx, ((voter_indices, targets), probs) in enumerate(zip(target_indices, contest_probs)):
+#         if len(voter_indices) == 0:
+#             continue  # Skip contests with no participants in this batch
             
-        # Get predictions for participating voters
-        participant_probs = probs[voter_indices]
+#         # Get predictions for participating voters
+#         participant_probs = probs[voter_indices]
         
-        # Calculate cross entropy loss for this contest
-        contest_loss = F.cross_entropy(participant_probs, targets)
-        recon_loss += contest_loss
-        total_contests += 1
+#         # Calculate cross entropy loss for this contest
+#         contest_loss = F.cross_entropy(participant_probs, targets)
+#         recon_loss += contest_loss
+#         total_contests += 1
     
-    # Average loss over actual contests
-    if total_contests > 0:
-        recon_loss = recon_loss / total_contests
+#     # Average loss over actual contests
+#     if total_contests > 0:
+#         recon_loss = recon_loss / total_contests
     
-    # KL divergence - regularizes the latent space
-    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+#     # KL divergence - regularizes the latent space
+#     kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     
-    # Scale KL loss by number of elements
-    kl_loss = kl_loss / mu.size(0)
+#     # Scale KL loss by number of elements
+#     kl_loss = kl_loss / mu.size(0)
     
-    # Total loss
-    total_loss = recon_loss + kl_weight * kl_loss
+#     # Total loss
+#     total_loss = recon_loss + kl_weight * kl_loss
     
-    return total_loss, recon_loss, kl_loss
+#     return total_loss, recon_loss, kl_loss
 
 # def train_voter_vae(model, input_data, target_indices, participation_mask, 
 #                     num_epochs=100, batch_size=64, learning_rate=1e-3, kl_weight=1.0):
@@ -414,6 +415,8 @@ def voter_vae_loss_constrained(contest_probs, target_indices, participation_mask
     constraint_weight: float
         Weight for the constraint penalty term
     """
+    device = model.device
+    
     # Calculate standard loss components
     recon_loss = 0.0
     total_contests = 0
@@ -421,6 +424,10 @@ def voter_vae_loss_constrained(contest_probs, target_indices, participation_mask
     for contest_idx, ((voter_indices, targets), probs) in enumerate(zip(target_indices, contest_probs)):
         if len(voter_indices) == 0:
             continue  # Skip contests with no participants in this batch
+
+        # Ensure tensors are on same device
+        voter_indices = voter_indices.to(device)
+        targets = targets.to(device)
             
         # Get predictions for participating voters
         participant_probs = probs[voter_indices]
@@ -453,6 +460,12 @@ def voter_vae_loss_constrained(contest_probs, target_indices, participation_mask
     
     return total_loss, recon_loss, kl_loss, constraint_penalty
 
+def custom_collate_fn(batch):
+    """Custom collate function that can handle sparse tensors"""
+    data = torch.stack([item[0] for item in batch])
+    mask = torch.stack([item[1] for item in batch])
+    return [data, mask]
+
 def train_voter_vae_constrained(model, input_data, target_indices, participation_mask_tensor, 
                                metadata, pres_race_name, trump_name, biden_name,
                                num_epochs=100, batch_size=64, learning_rate=1e-3, 
@@ -478,10 +491,11 @@ def train_voter_vae_constrained(model, input_data, target_indices, participation
 
     # Get the device
     device = model.device
+    print(f"Using device: {device}")
     
     # Move input data to device
     input_data = input_data.to(device)
-    participation_mask = participation_mask.to(device)
+    participation_mask = participation_mask_tensor.to(device)
     
     # Move target indices to device
     device_target_indices = []
@@ -501,7 +515,7 @@ def train_voter_vae_constrained(model, input_data, target_indices, participation
     
     # Create dataset and dataloader
     dataset = torch.utils.data.TensorDataset(input_data, participation_mask_tensor)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=custom_collate_fn)
     
     # Optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -513,8 +527,14 @@ def train_voter_vae_constrained(model, input_data, target_indices, participation
         total_recon = 0.0
         total_kl = 0.0
         total_constraint = 0.0
+
+        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
         
-        for batch_idx, (data, mask) in enumerate(dataloader):
+        for batch_idx, (data, mask) in enumerate(pbar):
+            # Ensure batch data is on correct device
+            data = data.to(device)
+            mask = mask.to(device)
+            
             optimizer.zero_grad()
             
             # Forward pass
@@ -550,6 +570,13 @@ def train_voter_vae_constrained(model, input_data, target_indices, participation
             total_recon += recon.item()
             total_kl += kl.item()
             total_constraint += constraint.item()
+
+            # Update progress bar description with loss values
+            pbar.set_postfix({
+                'loss': f"{loss.item():.4f}", 
+                'recon': f"{recon.item():.4f}",
+                'kl': f"{kl.item():.4f}"
+            })
         
         # Print progress
         avg_loss = total_loss / len(dataloader)
@@ -560,6 +587,7 @@ def train_voter_vae_constrained(model, input_data, target_indices, participation
         print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}, "
               f"Recon: {avg_recon:.4f}, KL: {avg_kl:.4f}, "
               f"Constraint: {avg_constraint:.4f}")
+        
         
         # Check parameter values across all dimensions
         with torch.no_grad():
