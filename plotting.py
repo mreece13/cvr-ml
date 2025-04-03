@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import polars as pl
 import seaborn as sns
 from matplotlib.colors import ListedColormap
 import torch
@@ -57,8 +58,10 @@ def visualize_voter_latent_space(model, input_data, participation_mask_tensor, m
     
     # Get presidential votes
     pres_votes = {}
-    pres_df = sample_df[(sample_df['office'] == pres_race_name.split('_')[0]) & 
-                         (sample_df['district'] == pres_race_name.split('_')[1])]
+    pres_df = sample_df.with_columns(
+        pl.concat_str([pl.col('office'), pl.lit('_'), 
+                      pl.col('district').cast(pl.Utf8)]).alias('race')
+    ).filter(pl.col("race") == pres_race_name).to_pandas()
     
     for _, row in pres_df.iterrows():
         pres_votes[row['cvr_id']] = row['candidate']

@@ -30,16 +30,6 @@ def visualize_relative_discrimination_vectors(adjusted_params, reference_info, m
     # Create figure
     plt.figure(figsize=(12, 10))
     
-    # Plot voter embeddings if provided
-    if voter_embeddings is not None:
-        plt.scatter(
-            voter_embeddings['trait_0'],
-            voter_embeddings['trait_1'],
-            alpha=0.2,
-            s=10,
-            color='gray'
-        )
-    
     # Define color map for different contests
     contest_colors = plt.cm.tab10.colors
     
@@ -48,22 +38,30 @@ def visualize_relative_discrimination_vectors(adjusted_params, reference_info, m
         # Get contest info
         race_name = reference_info[contest_idx]['race']
         ref_name = reference_info[contest_idx]['name']
+
+        if contest_filter is not None and contest_filter not in race_name:
+            continue
         
         # Extract office and district
         parts = race_name.split('_')
         office = parts[0]
         district = parts[1] if len(parts) > 1 else ""
-
-        if contest_filter is not None and office not in contest_filter:
-            continue
         
         # Get candidate names
         candidate_map = metadata['candidate_maps'][contest_idx]
         
         # Plot vectors for each non-reference candidate
         for candidate_idx, candidate_name in sorted([(v, k) for k, v in candidate_map.items()]):
+            color = contest_colors[contest_idx % len(contest_colors)]
+            
             # Skip reference candidate (should be at origin)
             if candidate_idx == reference_info[contest_idx]['index']:
+                plt.text(
+                    0, 0, 
+                    f"{office}-{district}: {candidate_name}",
+                    fontsize=8,
+                    color=color
+                )
                 continue
                 
             # Get vector (first two dimensions)
@@ -75,10 +73,9 @@ def visualize_relative_discrimination_vectors(adjusted_params, reference_info, m
                     continue
                 
                 # Plot vector
-                color = contest_colors[contest_idx % len(contest_colors)]
                 plt.arrow(
                     0, 0, vector[0], vector[1],
-                    head_width=0.05, head_length=0.1,
+                    head_width=0.02, head_length=0.05,
                     alpha=0.8,
                     color=color,
                     length_includes_head=True
@@ -86,8 +83,8 @@ def visualize_relative_discrimination_vectors(adjusted_params, reference_info, m
                 
                 # Add label
                 plt.text(
-                    vector[0] * 1.1,
-                    vector[1] * 1.1,
+                    vector[0] * 1.05,
+                    vector[1] * 1.05,
                     f"{office}-{district}: {candidate_name}",
                     fontsize=8,
                     color=color
@@ -450,3 +447,142 @@ def postprocess_discrimination_parameters(model, metadata, reference_candidates=
         adjusted_discrimination_params.append(contest_params)
     
     return adjusted_discrimination_params, reference_info
+
+def visualize_dimensions_as_points(adjusted_params, reference_info, metadata, 
+                                  output_file=None, contest_filter=None, 
+                                  dim_labels=None, figsize=(15, 10)):
+    """
+    Visualize each dimension separately as points, with contests on y-axis and values on x-axis.
+    
+    Parameters:
+    -----------
+    adjusted_params : list
+        List of adjusted discrimination parameter tensors
+    reference_info : dict
+        Information about reference candidates
+    metadata : dict
+        Dictionary containing mappings between races/candidates and indices
+    output_file : str, optional
+        Path to save the visualization
+    contest_filter : str, optional
+        Only include contests containing this string
+    dim_labels : list, optional
+        Labels for each dimension (default: ["Liberal-Conservative", "Dimension 2", ...])
+    figsize : tuple, optional
+        Figure size (width, height)
+        
+    Returns:
+    --------
+    fig : matplotlib.figure.Figure
+        The created figure
+    """
+    # Determine number of dimensions from the first non-empty tensor
+    for params in adjusted_params:
+        if params.size(0) > 0:
+            n_dims = params.size(1)
+            break
+    else:
+        raise ValueError("No non-empty parameter tensors found")
+    
+    # Create default dimension labels if not provided
+    if dim_labels is None:
+        dim_labels = ["Liberal-Conservative" if i == 0 else f"Dimension {i+1}" for i in range(n_dims)]
+    
+    # Create figure with subplots (one per dimension)
+    fig, axes = plt.subplots(1, n_dims, figsize=figsize, sharey=True)
+    if n_dims == 1:
+        axes = [axes]  # Handle single dimension case
+    
+    # Collect all contests and candidates to determine y-axis ordering
+    contest_candidates = []
+    
+    for contest_idx, contest_params in enumerate(adjusted_params):
+        # Get contest info
+        race_name = reference_info[contest_idx]['race']
+        
+        # Skip if contest_filter is provided and not in race_name
+        if contest_filter is not None and contest_filter not in race_name:
+            continue
+        
+        # Extract office and district
+        parts = race_name.split('_')
+        office = parts[0]
+        district = parts[1] if len(parts) > 1 else ""
+        
+        # Get candidate names
+        candidate_map = metadata['candidate_maps'][contest_idx]
+        
+        # Add each candidate
+        for candidate_idx, candidate_name in sorted([(v, k) for k, v in candidate_map.items()]):
+            label = f"{office}-{district}: {candidate_name}"
+            contest_candidates.append((contest_idx, candidate_idx, label))
+    
+    # Sort contest candidates by office, district, name for consistent ordering
+    contest_candidates.sort(key=lambda x: x[2])
+    
+    # Create reversed mapping for y-positions
+    y_positions = {candidate_tuple: i for i, candidate_tuple in enumerate(contest_candidates)}
+    
+    # Define color map for different contests
+    contest_colors = plt.cm.tab10.colors
+    
+    # Plot each dimension
+    for dim_idx in range(n_dims):
+        ax = axes[dim_idx]
+        
+        # Set dimension title
+        ax.set_title(dim_labels[dim_idx], fontsize=12)
+        
+        # Plot points for each contest/candidate
+        for contest_idx, candidate_idx, label in contest_candidates:
+            # Get parameter value for this dimension
+            if candidate_idx == reference_info[contest_idx]['index']:
+                value = 0
+            else:
+                value = adjusted_params[contest_idx][candidate_idx, dim_idx].item()
+            
+            # Get y-position
+            y_pos = y_positions[(contest_idx, candidate_idx, label)]
+            
+            # Get color based on contest
+            color = contest_colors[contest_idx % len(contest_colors)]
+            
+            # Plot point
+            ax.scatter(value, y_pos, color=color, s=50)
+            
+            # Add candidate label on the first dimension plot only
+            if dim_idx == 0:
+                ax.text(-0.1, y_pos, label, fontsize=8, ha='right', va='center')
+        
+        # Add vertical line at zero
+        ax.axvline(x=0, color='black', linestyle='--', alpha=0.3)
+        
+        # Set x-axis label
+        ax.set_xlabel(f"Value", fontsize=10)
+        
+        # Remove y-axis ticks except for first plot
+        if dim_idx > 0:
+            ax.set_yticklabels([])
+        else:
+            ax.set_yticks([])  # No y-axis ticks for first plot either since we have text labels
+    
+    # Set common y-axis label
+    fig.text(0.01, 0.5, 'Contests & Candidates', fontsize=12, va='center', rotation='vertical')
+    
+    # Add overall title
+    plt.suptitle('Discrimination Parameters by Dimension', fontsize=14)
+    
+    # Adjust layout
+    plt.tight_layout(rect=[0.05, 0, 1, 0.95])  # Make room for y-axis label
+    
+    # Adjust horizontal spacing between subplots
+    plt.subplots_adjust(wspace=0.05)
+    
+    # Save or display
+    if output_file:
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"Visualization saved to {output_file}")
+    else:
+        plt.show()
+    
+    return fig
