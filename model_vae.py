@@ -38,10 +38,14 @@ class VoterChoiceVAE(nn.Module):
         self.total_candidates = sum(num_candidates_per_contest)
         
         # Encoder network (takes sparse input of voter choices)
+        # made more robust to avoid posterior collapse
         self.encoder = nn.Sequential(
             nn.Linear(self.total_candidates, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.2),
             nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.ReLU()
         )
         
@@ -160,6 +164,42 @@ class VoterChoiceVAE(nn.Module):
         difficulty_params = [decoder.bias.data for decoder in self.contest_decoders]
         
         return discrimination_params, difficulty_params
+
+def kl_annealing_weight(epoch, total_epochs, start_weight=0.0, end_weight=1.0, annealing_type='linear'):
+    """
+    Calculate KL weight based on current epoch.
+    
+    Parameters:
+    -----------
+    epoch: int
+        Current epoch (0-indexed)
+    total_epochs: int
+        Total number of epochs
+    start_weight: float
+        Starting KL weight
+    end_weight: float
+        Final KL weight
+    annealing_type: str
+        Type of annealing schedule ('linear', 'sigmoid', or 'cyclical')
+    """
+    if annealing_type == 'linear':
+        # Linear annealing from start_weight to end_weight
+        return start_weight + (end_weight - start_weight) * (epoch / total_epochs)
+    
+    elif annealing_type == 'sigmoid':
+        # Sigmoid annealing (slower at beginning and end, faster in the middle)
+        inflection_point = total_epochs / 2
+        steepness = 6  # Controls transition steepness
+        sigmoid_val = 1 / (1 + np.exp(-steepness * (epoch - inflection_point) / total_epochs))
+        return start_weight + (end_weight - start_weight) * sigmoid_val
+    
+    elif annealing_type == 'cyclical':
+        # Cyclical annealing (rises, then drops partially, rises again)
+        cycles = 3  # Number of cycles
+        period = total_epochs / cycles
+        within_cycle = epoch % period
+        cycle_weight = within_cycle / period
+        return start_weight + (end_weight - start_weight) * cycle_weight
 
 def prepare_sparse_voter_data(raw_data, participation_mask, num_candidates_per_contest):
     """
@@ -397,7 +437,7 @@ def prepare_sparse_voter_data(raw_data, participation_mask, num_candidates_per_c
 
 def voter_vae_loss_constrained(contest_probs, target_indices, participation_mask, mu, logvar, 
                                model, pres_contest_idx, trump_idx, biden_idx, 
-                               kl_weight=1.0, constraint_weight=10.0):
+                               kl_weight=1.0, constraint_weight=5.0, free_bits=0.25):
     """
     Loss function with soft constraint for presidential candidate ordering.
     
@@ -442,8 +482,14 @@ def voter_vae_loss_constrained(contest_probs, target_indices, participation_mask
         recon_loss = recon_loss / total_contests
     
     # KL divergence - regularizes the latent space
-    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    kl_loss = kl_loss / mu.size(0)
+    # kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    # kl_loss = kl_loss / mu.size(0)
+
+    # Replace with per-dimension
+    kl_per_dimension = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()) 
+    free_bits_per_dim = free_bits / model.latent_dim  # Distribute across dimensions
+    kl_per_dimension = torch.max(kl_per_dimension, torch.ones_like(kl_per_dimension) * free_bits_per_dim)
+    kl_loss = kl_per_dimension.sum()
     
     # Presidential candidate constraint penalty
     # Get the discrimination parameters for Trump and Biden
@@ -467,9 +513,10 @@ def custom_collate_fn(batch):
     return [data, mask]
 
 def train_voter_vae_constrained(model, input_data, target_indices, participation_mask_tensor, 
-                               metadata, pres_race_name, trump_name, biden_name,
-                               num_epochs=100, batch_size=64, learning_rate=1e-3, 
-                               kl_weight=1.0, constraint_weight=10.0):
+                                metadata, pres_race_name, trump_name, biden_name,
+                                num_epochs=100, batch_size=64, learning_rate=1e-3, 
+                                kl_start_weight=0.0, kl_end_weight=0.5, kl_annealing='sigmoid',
+                                constraint_weight=1.0):
     """
     Train the voter choice VAE model with presidential candidate constraint
     
@@ -527,6 +574,14 @@ def train_voter_vae_constrained(model, input_data, target_indices, participation
         total_recon = 0.0
         total_kl = 0.0
         total_constraint = 0.0
+
+        # Apply KL annealing
+        kl_weight = kl_annealing_weight(
+            epoch, num_epochs, 
+            start_weight=kl_start_weight, 
+            end_weight=kl_end_weight,
+            annealing_type=kl_annealing
+        )
 
         pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{num_epochs}")
         
@@ -586,7 +641,7 @@ def train_voter_vae_constrained(model, input_data, target_indices, participation
         
         print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}, "
               f"Recon: {avg_recon:.4f}, KL: {avg_kl:.4f}, "
-              f"Constraint: {avg_constraint:.4f}")
+              f"Constraint: {avg_constraint:.4f}, KL weight: {kl_weight:.4f}")
         
         
         # Check parameter values across all dimensions
