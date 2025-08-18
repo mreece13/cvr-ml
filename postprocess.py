@@ -448,7 +448,7 @@ def postprocess_discrimination_parameters(model, metadata, reference_candidates=
     
     return adjusted_discrimination_params, reference_info
 
-def visualize_dimensions_as_points(adjusted_params, reference_info, metadata, 
+def visualize_dimensions_as_points(model, metadata, reference_candidates=None, plot_reference=True,
                                   output_file=None, contest_filter=None, 
                                   dim_labels=None, figsize=(15, 10)):
     """
@@ -476,6 +476,14 @@ def visualize_dimensions_as_points(adjusted_params, reference_info, metadata,
     fig : matplotlib.figure.Figure
         The created figure
     """
+    adjusted_params, reference_info = postprocess_discrimination_parameters(
+        model, metadata, reference_candidates
+    )
+
+    # Get uncertainty estimates
+    discrim_uncertainty = model.get_discrimination_uncertainty()
+    diff_uncertainty = model.get_difficulty_uncertainty()
+
     # Determine number of dimensions from the first non-empty tensor
     for params in adjusted_params:
         if params.size(0) > 0:
@@ -514,6 +522,9 @@ def visualize_dimensions_as_points(adjusted_params, reference_info, metadata,
         
         # Add each candidate
         for candidate_idx, candidate_name in sorted([(v, k) for k, v in candidate_map.items()]):
+            if not plot_reference and candidate_idx == reference_info[contest_idx]['index']:
+                continue
+            
             label = f"{office}-{district}: {candidate_name}"
             contest_candidates.append((contest_idx, candidate_idx, label))
     
@@ -582,7 +593,5 @@ def visualize_dimensions_as_points(adjusted_params, reference_info, metadata,
     if output_file:
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
         print(f"Visualization saved to {output_file}")
-    else:
-        plt.show()
     
-    return fig
+    return output_file

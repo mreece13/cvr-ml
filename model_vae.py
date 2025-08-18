@@ -164,6 +164,91 @@ class VoterChoiceVAE(nn.Module):
         difficulty_params = [decoder.bias.data for decoder in self.contest_decoders]
         
         return discrimination_params, difficulty_params
+    
+    def get_direct_variance(self, x, mask=None):
+        """Extract variance directly from the encoder output."""
+        with torch.no_grad():
+            mu, logvar = self.encode(x, mask)
+            # Convert logvar to actual variance
+            variance = torch.exp(logvar)
+            # You can also get average variance per sample
+            avg_uncertainty = torch.mean(variance, dim=1)
+        return variance, avg_uncertainty
+    
+    def get_mc_dropout_variance(self, x, mask=None, n_samples=10):
+        """Monte Carlo dropout sampling for uncertainty estimation."""
+        # Set to train mode to enable dropout
+        self.train()
+        samples = []
+        
+        with torch.no_grad():
+            for _ in range(n_samples):
+                mu, logvar = self.encode(x, mask)
+                z = self.reparameterize(mu, logvar)
+                samples.append(z)
+                
+        # Stack and compute variance
+        samples = torch.stack(samples)
+        mc_variance = torch.var(samples, dim=0)
+        avg_uncertainty = torch.mean(mc_variance, dim=1)
+        
+        # Set back to eval mode if needed
+        self.eval()
+        return mc_variance, avg_uncertainty
+    
+    def get_elbo_uncertainty(self, x, mask=None):
+        """Calculate uncertainty via KL divergence (part of ELBO)."""
+        with torch.no_grad():
+            mu, logvar = self.encode(x, mask)
+            # Calculate KL divergence per sample
+            kl_divergence = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+        return kl_divergence
+    
+    def get_parameter_uncertainty(self, input_data, participation_mask, n_samples=50):
+        """Bootstrap uncertainty for model parameters with sparse data support."""
+        self.eval()
+        
+        discrimination_samples = []
+        difficulty_samples = []
+        
+        # Convert sparse tensor to dense if needed
+        if input_data.is_sparse:
+            input_data = input_data.to_dense()
+        
+        batch_size = min(100, input_data.size(0))
+        
+        with torch.no_grad():
+            for _ in range(n_samples):
+                # Sample with replacement
+                indices = torch.randint(0, input_data.size(0), (batch_size,))
+                batch_x = input_data[indices]
+                batch_mask = participation_mask[indices]
+                
+                # Process batch and store parameter snapshots
+                mu, logvar = self.encode(batch_x, batch_mask)
+                
+                # Store current parameters
+                temp_discriminations = []
+                temp_difficulties = []
+                for decoder in self.contest_decoders:
+                    temp_discriminations.append(decoder.weight.data.clone())
+                    temp_difficulties.append(decoder.bias.data.clone())
+                
+                discrimination_samples.append(temp_discriminations)
+                difficulty_samples.append(temp_difficulties)
+        
+        # Calculate variance across bootstrap samples
+        discrim_uncertainty = []
+        diff_uncertainty = []
+        
+        for contest_idx in range(len(self.contest_decoders)):
+            contest_samples = torch.stack([samples[contest_idx] for samples in discrimination_samples])
+            discrim_uncertainty.append(torch.var(contest_samples, dim=0))
+            
+            contest_samples = torch.stack([samples[contest_idx] for samples in difficulty_samples])
+            diff_uncertainty.append(torch.var(contest_samples, dim=0))
+        
+        return discrim_uncertainty, diff_uncertainty
 
 def kl_annealing_weight(epoch, total_epochs, start_weight=0.0, end_weight=1.0, annealing_type='linear'):
     """
@@ -305,135 +390,6 @@ def prepare_sparse_voter_data(raw_data, participation_mask, num_candidates_per_c
         ))
     
     return input_data, target_indices, participation_mask_tensor
-
-# def voter_vae_loss(contest_probs, target_indices, participation_mask, mu, logvar, kl_weight=1.0):
-#     """
-#     Loss function for the voter choice VAE with variable contest participation
-    
-#     Parameters:
-#     -----------
-#     contest_probs: list of torch.Tensor
-#         Predicted probabilities for each contest
-#     target_indices: list of (indices, choices) tuples
-#         For each contest, indices of participating voters and their choices
-#     participation_mask: torch.Tensor
-#         Binary mask indicating which contests each voter participated in
-#     mu, logvar: torch.Tensor
-#         Latent space parameters
-#     kl_weight: float
-#         Weight for KL divergence term
-        
-#     Returns:
-#     --------
-#     total_loss: torch.Tensor
-#         Combined loss value
-#     recon_loss: torch.Tensor
-#         Reconstruction loss component
-#     kl_loss: torch.Tensor
-#         KL divergence loss component
-#     """
-#     # Reconstruction loss (categorical cross-entropy for each contest)
-#     recon_loss = 0.0
-#     total_contests = 0
-    
-#     for contest_idx, ((voter_indices, targets), probs) in enumerate(zip(target_indices, contest_probs)):
-#         if len(voter_indices) == 0:
-#             continue  # Skip contests with no participants in this batch
-            
-#         # Get predictions for participating voters
-#         participant_probs = probs[voter_indices]
-        
-#         # Calculate cross entropy loss for this contest
-#         contest_loss = F.cross_entropy(participant_probs, targets)
-#         recon_loss += contest_loss
-#         total_contests += 1
-    
-#     # Average loss over actual contests
-#     if total_contests > 0:
-#         recon_loss = recon_loss / total_contests
-    
-#     # KL divergence - regularizes the latent space
-#     kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    
-#     # Scale KL loss by number of elements
-#     kl_loss = kl_loss / mu.size(0)
-    
-#     # Total loss
-#     total_loss = recon_loss + kl_weight * kl_loss
-    
-#     return total_loss, recon_loss, kl_loss
-
-# def train_voter_vae(model, input_data, target_indices, participation_mask, 
-#                     num_epochs=100, batch_size=64, learning_rate=1e-3, kl_weight=1.0):
-#     """
-#     Train the voter choice VAE model
-    
-#     Parameters:
-#     -----------
-#     model: VoterChoiceVAE
-#         The VAE model
-#     input_data: torch.Tensor
-#         One-hot encoded voter choices
-#     target_indices: list of (indices, choices) tuples
-#         For each contest, indices of participating voters and their choices
-#     participation_mask: torch.Tensor
-#         Binary mask indicating which contests each voter participated in
-#     """
-#     # Create dataset and dataloader
-#     dataset = TensorDataset(input_data, participation_mask)
-#     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    
-#     # Optimizer
-#     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    
-#     # Training loop
-#     model.train()
-#     for epoch in range(num_epochs):
-#         total_loss = 0.0
-#         total_recon = 0.0
-#         total_kl = 0.0
-        
-#         for batch_idx, (data, mask) in enumerate(dataloader):
-#             optimizer.zero_grad()
-            
-#             # Forward pass
-#             contest_probs, mu, logvar = model(data, mask)
-            
-#             # Extract targets for this batch
-#             batch_start = batch_idx * batch_size
-#             batch_end = min((batch_idx + 1) * batch_size, len(input_data))
-            
-#             # Create batch-specific target indices
-#             batch_targets = []
-#             for contest_idx, (voter_indices, targets) in enumerate(target_indices):
-#                 # Find voters in this batch who participated in this contest
-#                 batch_mask = (voter_indices >= batch_start) & (voter_indices < batch_end)
-#                 batch_voter_indices = voter_indices[batch_mask] - batch_start
-#                 batch_voter_targets = targets[batch_mask]
-                
-#                 batch_targets.append((batch_voter_indices, batch_voter_targets))
-            
-#             # Compute loss
-#             loss, recon, kl = voter_vae_loss(contest_probs, batch_targets, mask, mu, logvar, kl_weight)
-            
-#             # Backward pass and optimize
-#             loss.backward()
-#             optimizer.step()
-            
-#             # Track metrics
-#             total_loss += loss.item()
-#             total_recon += recon.item()
-#             total_kl += kl.item()
-        
-#         # Print progress
-#         avg_loss = total_loss / len(dataloader)
-#         avg_recon = total_recon / len(dataloader)
-#         avg_kl = total_kl / len(dataloader)
-        
-#         print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}, "
-#               f"Recon: {avg_recon:.4f}, KL: {avg_kl:.4f}")
-    
-#     return model
 
 def voter_vae_loss_constrained(contest_probs, target_indices, participation_mask, mu, logvar, 
                                model, pres_contest_idx, trump_idx, biden_idx, 
