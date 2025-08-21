@@ -229,3 +229,4 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+/lightning_logs
