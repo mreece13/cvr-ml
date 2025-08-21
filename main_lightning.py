@@ -6,6 +6,12 @@ from torch.utils.data import DataLoader
 import os
 import numpy as np
 import pandas as pd
+from lightning.pytorch.plugins.environments import SLURMEnvironment
+
+# better numerial stability for matmul, and supported only on Engaging
+# only set option if CUDA detected
+if torch.cuda.is_available():
+    torch.set_float32_matmul_precision('high')
 
 def main():
     parser = argparse.ArgumentParser(description='Train CVAE on ballot data')
@@ -30,7 +36,14 @@ def main():
 
     # 2) DataLoader
     ds = p.get_torch_dataset()
-    dl = DataLoader(ds, batch_size=args.batch_size, shuffle=True, drop_last=False, num_workers=9, persistent_workers=True)
+    dl = DataLoader(
+        ds, 
+        batch_size=args.batch_size, 
+        shuffle=True, 
+        drop_last=False, 
+        num_workers=8, 
+        persistent_workers=True
+    )
 
     # 3) instantiate CVAE
     model = CVAE(
@@ -47,7 +60,20 @@ def main():
     )
 
     if not args.eval_only:
-        trainer = L.Trainer(max_epochs=args.epochs, accelerator='auto', devices='auto')
+        if torch.cuda.is_available():
+            trainer = L.Trainer(
+                max_epochs=args.epochs, 
+                accelerator='auto', 
+                devices='auto', 
+                plugins=[SLURMEnvironment(requeue_signal=signal.SIGUSR1)]
+            )
+        else:
+            trainer = L.Trainer(
+                max_epochs=args.epochs, 
+                accelerator='auto', 
+                devices='auto', 
+            )
+
         trainer.fit(model)
     
     # print('Diagnostic 1:')
