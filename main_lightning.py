@@ -8,11 +8,6 @@ import numpy as np
 import pandas as pd
 from lightning.pytorch.plugins.environments import SLURMEnvironment
 
-# better numerial stability for matmul, and supported only on Engaging
-# only set option if CUDA detected
-if torch.cuda.is_available():
-    torch.set_float32_matmul_precision('high')
-
 def main():
     parser = argparse.ArgumentParser(description='Train CVAE on ballot data')
     parser.add_argument('--data', type=str, default='')
@@ -58,6 +53,11 @@ def main():
         encoder_emb_dim=args.emb_dim,
         n_samples=args.n_samples,
     )
+
+    # better numerial stability for matmul, and supported only on Engaging
+    # only set option if CUDA detected
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('high')
 
     if not args.eval_only:
         if torch.cuda.is_available():
@@ -302,6 +302,106 @@ def evaluate_and_export(model: torch.nn.Module,
     out_items = os.path.join(out_dir, "item_parameters.csv")
     df_items.to_csv(out_items, index=False)
     print(f"Saved item parameters -> {out_items}")
+
+    # ------------------ extra exports: per-voter projections & pres. probs ------------------
+    # find presidential item index (best effort by name match)
+    pres_idx = None
+    if item_names is not None:
+        for i, nm in enumerate(item_names):
+            if nm and 'PRESIDENT' in nm.upper():
+                pres_idx = i
+                break
+
+    # only proceed if we found a presidential item
+    if pres_idx is not None:
+        # candidate name list for pres item
+        pres_cands = candidate_names_per_item[pres_idx]
+        # try to pick Biden and Trump indices
+        biden_name = 'JOSEPH R BIDEN'
+        trump_name = 'DONALD J TRUMP'
+        biden_idx = None
+        trump_idx = None
+        for k, name in enumerate(pres_cands):
+            if name.upper() == biden_name:
+                biden_idx = k
+            if name.upper() == trump_name:
+                trump_idx = k
+        # fallback to first two classes if exact names not found
+        if biden_idx is None or trump_idx is None:
+            raise RuntimeError(f"Could not find both Biden and Trump in presidential candidate names: {pres_cands}")
+
+        # build decoder W and b for pres item
+        W_param = model.decoder.weights_list[pres_idx].detach().cpu().numpy()  # [D, Ki]
+        b_param = model.decoder.bias_list[pres_idx].detach().cpu().numpy()     # [Ki]
+        W_per_class = W_param.T  # [Ki, D]
+
+        # compute Biden-Trump separating axis (delta w)
+        if biden_idx is not None and trump_idx is not None:
+            delta = W_per_class[biden_idx] - W_per_class[trump_idx]
+            delta_norm = np.linalg.norm(delta)
+            if delta_norm > 0:
+                delta_unit = (delta / delta_norm)
+            else:
+                delta_unit = delta * 0.0
+        else:
+            delta_unit = None
+
+        # compute per-voter probabilities and projections
+        # mu_all is [N, D]
+        # numerically-stable numpy softmax (avoid extra SciPy dependency)
+        def _np_softmax(a, axis=1):
+            a = a - np.max(a, axis=axis, keepdims=True)
+            e = np.exp(a)
+            return e / np.sum(e, axis=axis, keepdims=True)
+
+        logits = mu_all.dot(W_param) + b_param  # mu_all [N,D] dot W_param [D,Ki] -> [N,Ki]
+        probs = _np_softmax(logits, axis=1)
+
+        # projection onto Biden-Trump axis
+        if delta_unit is not None:
+            proj_bt = mu_all.dot(delta_unit)
+        else:
+            proj_bt = np.full((mu_all.shape[0],), np.nan)
+
+        # per-dimension projections (ideal points per latent dim)
+        per_dim = mu_all.copy()  # each column is an 'ideal point' on that dimension
+
+        # assemble voter dataframe with ids (if available)
+        df_voters = pd.DataFrame(per_dim, columns=[f'z{d}' for d in range(per_dim.shape[1])])
+        # attach ids if they exist in the earlier saved df_latents
+        try:
+            ids_cols = [c for c in df_latents.columns if c not in df_voters.columns]
+            if ids_cols:
+                df_voters = pd.concat([df_latents[ids_cols].reset_index(drop=True), df_voters.reset_index(drop=True)], axis=1)
+        except Exception:
+            pass
+
+        # add projection and pres probs
+        df_voters['proj_biden_minus_trump'] = proj_bt
+        # ensure indices exist in pres_cands
+        if biden_idx is not None:
+            df_voters['p_biden'] = probs[:, biden_idx]
+        if trump_idx is not None:
+            df_voters['p_trump'] = probs[:, trump_idx]
+
+        # also add predicted winner and max prob
+        df_voters['pred_class'] = probs.argmax(axis=1)
+        df_voters['pred_prob'] = probs.max(axis=1)
+
+        out_voters = os.path.join(out_dir, 'voter_scores.csv')
+        df_voters.to_csv(out_voters, index=False)
+        print(f"Saved voter projections & pres. probs -> {out_voters}")
+
+        # print which latent dimension individually best correlates with BT axis
+        if delta_unit is not None:
+            corrs = []
+            for d in range(per_dim.shape[1]):
+                c = np.corrcoef(per_dim[:, d], proj_bt)[0,1]
+                corrs.append(abs(c))
+            best_dim = int(np.nanargmax(corrs))
+            print(f'Best single latent dim separating Biden/Trump: dim {best_dim} (abs corr={corrs[best_dim]:.3f})')
+        else:
+            print('Could not compute Biden-Trump separating axis (missing indices)')
 
 if __name__ == '__main__':
     main()
