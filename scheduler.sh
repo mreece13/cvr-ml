@@ -15,4 +15,5 @@ module load cuda/12.4.0
 mamba activate cvr-ml
 
 # Run your application
-srun python main_lightning.py --data data/colorado.parquet --epochs 10 --batch-size=512
+# srun python main_lightning.py --data data/colorado.parquet --epochs 10 --batch-size=512
+srun python main_lightning.py --data data/colorado.parquet --batch-size=512 --eval-only True
