@@ -7,7 +7,6 @@ import os
 import numpy as np
 import pandas as pd
 from lightning.pytorch.plugins.environments import SLURMEnvironment
-import json
 
 def main():
     parser = argparse.ArgumentParser(description='Train CVAE on ballot data')
@@ -75,7 +74,8 @@ def main():
                 max_epochs=args.epochs, 
                 accelerator='auto', 
                 devices='auto', 
-                plugins=[SLURMEnvironment(requeue_signal=signal.SIGUSR1)]
+                precision="transformer-engine",
+                plugins=[SLURMEnvironment()]
             )
         else:
             trainer = L.Trainer(
