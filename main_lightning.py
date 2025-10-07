@@ -7,6 +7,7 @@ import os
 import numpy as np
 import pandas as pd
 from lightning.pytorch.plugins.environments import SLURMEnvironment
+import json
 
 def main():
     parser = argparse.ArgumentParser(description='Train CVAE on ballot data')
@@ -20,6 +21,15 @@ def main():
     parser.add_argument('--n-samples', type=int, default=1)
     parser.add_argument('--eval-only', type=bool, default=False)
     args = parser.parse_args()
+
+    # Build a file name using all arguments except eval-only
+    args_dict = {k: v for k, v in vars(args).items() if k != 'eval_only'}
+    file_name_parts = []
+    for k, v in args_dict.items():
+        file_name_parts.append(f"{k}{v}")
+    file_name = "_".join(file_name_parts)
+
+    print(f"Generated file name: {file_name}")
 
     DATA_PATH = args.data
     if not DATA_PATH:
@@ -168,11 +178,12 @@ def main():
     # except Exception as e:
     #     print('Warning: unable to run decoder sanity check:', e)
 
-    evaluate_and_export(model, p, eval_dl)
+    evaluate_and_export(model, p, eval_dl, file_name)
 
 def evaluate_and_export(model: torch.nn.Module,
                         processor: VoteDataProcessor,
                         dl: DataLoader,
+                        file_name: str,
                         out_dir: str = "outputs",
                         ref_name_special: str = "US PRESIDENT_FEDERAL",
                         ref_candidate_special: str = "JOSEPH R BIDEN"):
@@ -222,8 +233,8 @@ def evaluate_and_export(model: torch.nn.Module,
             df_latents = pd.concat([ids_df.reset_index(drop=True), df_latents.reset_index(drop=True)], axis=1)
         except Exception:
             pass
-    df_latents.to_csv(os.path.join(out_dir, "voter_latents.csv"), index=False)
-    print(f"Saved voter latents -> {os.path.join(out_dir, 'voter_latents.csv')}")
+    df_latents.to_csv(os.path.join(out_dir, file_name, "_voter_latents.csv"), index=False)
+    print(f"Saved voter latents -> {os.path.join(out_dir, file_name, '_voter_latents.csv')}")
 
     # --- extract per-item per-class decoder parameters (match Decoder in model.py) ---
     Ks = processor.get_n_classes_per_item()
@@ -299,7 +310,7 @@ def evaluate_and_export(model: torch.nn.Module,
             rows.append(row)
 
     df_items = pd.DataFrame(rows)
-    out_items = os.path.join(out_dir, "item_parameters.csv")
+    out_items = os.path.join(out_dir, file_name, "_item_parameters.csv")
     df_items.to_csv(out_items, index=False)
     print(f"Saved item parameters -> {out_items}")
 
@@ -326,7 +337,7 @@ def evaluate_and_export(model: torch.nn.Module,
                 biden_idx = k
             if name.upper() == trump_name:
                 trump_idx = k
-        # fallback to first two classes if exact names not found
+        
         if biden_idx is None or trump_idx is None:
             raise RuntimeError(f"Could not find both Biden and Trump in presidential candidate names: {pres_cands}")
 
@@ -388,7 +399,7 @@ def evaluate_and_export(model: torch.nn.Module,
         df_voters['pred_class'] = probs.argmax(axis=1)
         df_voters['pred_prob'] = probs.max(axis=1)
 
-        out_voters = os.path.join(out_dir, 'voter_scores.csv')
+        out_voters = os.path.join(out_dir, file_name, '_voter_scores.csv')
         df_voters.to_csv(out_voters, index=False)
         print(f"Saved voter projections & pres. probs -> {out_voters}")
 
