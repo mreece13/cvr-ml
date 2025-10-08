@@ -7,6 +7,7 @@ import os
 import numpy as np
 import pandas as pd
 from lightning.pytorch.plugins.environments import SLURMEnvironment
+import signal
 
 def main():
     parser = argparse.ArgumentParser(description='Train CVAE on ballot data')
