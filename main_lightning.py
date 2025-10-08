@@ -74,7 +74,7 @@ def main():
                 max_epochs=args.epochs, 
                 accelerator='auto', 
                 devices='auto', 
-                precision="transformer-engine",
+                # precision="transformer-engine",
                 plugins=[SLURMEnvironment()]
             )
         else:
