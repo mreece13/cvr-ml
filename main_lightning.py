@@ -75,7 +75,7 @@ def main():
                 accelerator='auto', 
                 devices='auto', 
                 # precision="transformer-engine",
-                plugins=[SLURMEnvironment()]
+                plugins=[SLURMEnvironment(requeue_signal=signal.SIGUSR1)]
             )
         else:
             trainer = L.Trainer(
