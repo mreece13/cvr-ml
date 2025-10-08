@@ -22,7 +22,7 @@ def main():
     args = parser.parse_args()
 
     # Build a file name using all arguments except eval-only
-    args_dict = {k: v for k, v in vars(args).items() if k != 'eval_only'}
+    args_dict = {k: v for k, v in vars(args).items() if (k != 'eval_only' & k != 'data')}
     file_name_parts = []
     for k, v in args_dict.items():
         file_name_parts.append(f"{k}{v}")
