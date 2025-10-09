@@ -234,8 +234,8 @@ def evaluate_and_export(model: torch.nn.Module,
             df_latents = pd.concat([ids_df.reset_index(drop=True), df_latents.reset_index(drop=True)], axis=1)
         except Exception:
             pass
-    df_latents.to_csv(os.path.join(out_dir, file_name, "_voter_latents.csv"), index=False)
-    print(f"Saved voter latents -> {os.path.join(out_dir, file_name, '_voter_latents.csv')}")
+    df_latents.to_csv(os.path.join(out_dir, file_name + "_voter_latents.csv"), index=False)
+    print(f"Saved voter latents -> {os.path.join(out_dir, file_name + '_voter_latents.csv')}")
 
     # --- extract per-item per-class decoder parameters (match Decoder in model.py) ---
     Ks = processor.get_n_classes_per_item()

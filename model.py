@@ -191,7 +191,7 @@ class EmbeddingEncoder(L.LightningModule):
 
 class CVAE(L.LightningModule):
     """
-    Neural network for the entire variational autoencoder
+    Neural network for the conditional variational autoencoder
     """
     def __init__(self,
                  dataloader,
@@ -213,7 +213,6 @@ class CVAE(L.LightningModule):
         """
         super(CVAE, self).__init__()
 
-        # basic bookkeeping
         self.nitems = nitems
         self.latent_dims = latent_dims
         self.hidden_layer_size = hidden_layer_size
@@ -433,56 +432,3 @@ class VoteDataProcessor:
 
     def get_n_classes_per_item(self):
         return self.n_classes_per_item
-
-class PartialEncoder(L.LightningModule):
-    def __init__(self, n_items, emb_dim, h_hidden_dim, latent_dim, hidden_layer_dim, mirt_dim):
-        """
-
-        :param n_items: total number of items
-        :param emb_dim: dimension of the embedding layer
-        :param latent_dim: dimension of the latent layer before pooling
-        :param hidden_layer_dim: dimension of the hidden layer after pooling
-        :param mirt_dim: latent dimension of the distribution that is sampled from
-        """
-        super(PartialEncoder, self).__init__()
-        self.embedding = nn.Embedding(
-                n_items+1,
-                emb_dim,
-        )
-
-        self.emb_dim = emb_dim
-        self.h_dense1 = nn.Linear(emb_dim, h_hidden_dim)
-        self.h_dense2 = nn.Linear(h_hidden_dim, latent_dim)
-
-
-        self.dense1 = nn.Linear(latent_dim*5, hidden_layer_dim*2)
-        self.dense3m = nn.Linear(hidden_layer_dim*2, mirt_dim)
-        self.dense3s = nn.Linear(hidden_layer_dim*2, mirt_dim)
-
-    def forward(self, item_ids: np.array, item_ratings: torch.Tensor) -> torch.Tensor:
-        """
-        A forward pass though the encoder network
-        :param item_ids: a tensor with item ids
-        :param item_ratings: a tensor with the corresponding item ratings
-        :returns: (sample from the latent distribution, mean of the distribution, sd of the distribution)
-        """
-        E = self.embedding(item_ids)
-
-        R = item_ratings.unsqueeze(2).repeat((1,1, self.emb_dim))
-
-        S = E * R
-
-        out = F.elu(self.h_dense1(S))
-        out = F.elu(self.h_dense2(out))
-        mean = torch.mean(out, 1)
-        median = torch.quantile(out, .5, 1)
-        sd = torch.std(out, 1)
-        q25 = torch.quantile(out, .25, 1)
-        q75 = torch.quantile(out, .75, 1)
-        dist = torch.cat([mean, median, sd, q25, q75], dim=1)
-        hidden = F.relu(self.dense1(dist))
-        mu = self.dense3m(hidden)
-        log_sigma = self.dense3s(hidden)
-        sigma = F.softplus(log_sigma)
-
-        return mu, sigma
