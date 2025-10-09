@@ -311,7 +311,7 @@ def evaluate_and_export(model: torch.nn.Module,
             rows.append(row)
 
     df_items = pd.DataFrame(rows)
-    out_items = os.path.join(out_dir, file_name, "_item_parameters.csv")
+    out_items = os.path.join(out_dir, file_name + "_item_parameters.csv")
     df_items.to_csv(out_items, index=False)
     print(f"Saved item parameters -> {out_items}")
 
@@ -400,7 +400,7 @@ def evaluate_and_export(model: torch.nn.Module,
         df_voters['pred_class'] = probs.argmax(axis=1)
         df_voters['pred_prob'] = probs.max(axis=1)
 
-        out_voters = os.path.join(out_dir, file_name, '_voter_scores.csv')
+        out_voters = os.path.join(out_dir, file_name + '_voter_scores.csv')
         df_voters.to_csv(out_voters, index=False)
         print(f"Saved voter projections & pres. probs -> {out_voters}")
 
