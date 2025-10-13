@@ -3,6 +3,7 @@ gc()
 
 library(tidyverse)
 library(arrow)
+library(data.table)
 
 get_gsheet <- function(url, sheet, ...) {
   googlesheets4::read_sheet(
@@ -37,10 +38,6 @@ rcvr::clean_cvr(
   write_path = "~/Dropbox (MIT)/Research/cvrs/data/pass2/state=COLORADO/county_name=GARFIELD/part-0.parquet"
 )
 
-read_parquet("~/Dropbox (MIT)/Research/cvrs/data/pass2/state=COLORADO/county_name=GARFIELD/part-0.parquet") |> 
-  mutate(across(everything(), str_to_upper)) |> 
-  write_parquet("~/Dropbox (MIT)/Research/cvrs/data/pass2/state=COLORADO/county_name=GARFIELD/part-0.parquet")
-
 open_dataset("~/Dropbox (MIT)/Research/cvrs/data/pass2") |> 
   filter(
     state == "COLORADO",
@@ -66,9 +63,9 @@ d |>
   ) |> 
   write_parquet("~/Dropbox (MIT)/Research/cvr-ml/data/colorado_sample.parquet")
 
-read_parquet("~/Dropbox (MIT)/Research/cvr-ml/data/colorado_sample.parquet") |> 
-  distinct(race) |> pull()
-
+d |> 
+  filter(n()>1, .by = c(state, county_name, cvr_id, race)) |> 
+  distinct(county_name, race)
 
 cands = open_dataset("../cvrs/data/pass2") |> 
   filter(state == "COLORADO") |> 
@@ -83,10 +80,62 @@ cands = open_dataset("../cvrs/data/pass2") |>
   ungroup() |> 
   distinct()
 
-raw = read_parquet("../cvr-ml/data/colorado_sample.parquet") |> 
+
+raw = read_parquet("data/colorado.parquet") |> 
   left_join(cands, join_by(race, candidate), relationship = "many-to-many")
 
-d = fread("../cvr-ml/outputs/voter_latents.csv")
+xwalk = raw |> 
+  distinct(state, county_name, cvr_id) |> 
+  arrange(state, county_name) |> 
+  bind_cols(
+    fread("~/Downloads/index.csv", select=4),
+    fread("outputs/batch_size512_latent_dims1_hidden_size64_emb_dim16_lr0.001_epochs20_n_samples1_voter_latents.csv")
+  )
+
+merged = raw |> 
+  # mutate(id = cur_group_id(), .by = c(county_name, cvr_id)) |> 
+  # filter(str_detect(race, "US PRESIDENT|US SENATE|US HOUSE")) |> 
+  filter(race == "US PRESIDENT_FEDERAL") |> 
+  mutate(
+    topparty = case_when(
+      party_detailed == "DEMOCRAT" ~ "Dem",
+      party_detailed == "REPUBLICAN" ~ "Rep",
+      .default = "Other"
+    )
+  ) |> 
+  # distinct(state, county_name, cvr_id, topparty, id) |> 
+  left_join(
+    xwalk, join_by(state, county_name, cvr_id == cvr_id...3)
+  ) |> 
+  select(-cvr_id, cvr_id = cvr_id...4)
+
+merged |> 
+  filter(topparty != "Other") |>
+  ggplot(aes(x = z0, fill = topparty)) +
+  ggdist::stat_slab(alpha = 0.5) +
+  theme_bw() +
+  scale_fill_manual(
+    values = c("Dem" = "#3791FF", "Rep" = "#F6573E", "Other" = "grey50")
+  )
+
+merged |> 
+  filter(topparty != "Other") |> 
+  ggplot(aes(x = z0, y = z1, color = topparty)) +
+  geom_density2d() +
+  theme_bw() +
+  scale_color_manual(
+    values = c("Dem" = "#3791FF", "Rep" = "#F6573E")
+  )
+
+ws = fread("outputs/batch_size512_latent_dims1_hidden_size64_emb_dim16_lr0.001_epochs20_n_samples1_item_parameters.csv")
+
+ws[
+  item_name == "US PRESIDENT_FEDERAL" & class_name %in% c("DONALD J TRUMP", "HOWIE HAWKINS", "JO JORGENSEN", "JOSEPH R BIDEN", "UNDERVOTE", "GLORIA LA RIVA"),
+  list (class_name, bias, discrimination, difficulty, w_0, w_1, w_2, w_3)
+  ]
+
+
+s = fread("../cvr-ml/outputs/voter_scores.csv")
 
 merged = raw |> 
   mutate(id = cur_group_id(), .by = c(county_name, cvr_id)) |> 
@@ -101,30 +150,20 @@ merged = raw |>
   ) |> 
   distinct(state, county_name, cvr_id, topparty, id) |> 
   left_join(
-    mutate(d, id = row_number()), join_by(id)
+    mutate(s, id = row_number()), join_by(id)
   )
 
 merged |> 
-  # filter(topparty != "Other") |> 
-  ggplot(aes(x = z1, fill = topparty)) +
-  ggdist::stat_slab(alpha = 0.5) +
-  theme_bw() +
-  scale_fill_manual(
-    values = c("Dem" = "#3791FF", "Rep" = "#F6573E", "Other" = "grey50")
-  )
-
-merged |> 
-  filter(topparty == "Other") |> 
-  ggplot(aes(x = z0, y = z1, color = topparty)) +
-  geom_density2d_filled() +
+  filter(topparty != "Other") |> 
+  ggplot(aes(x = z0, color = topparty)) +
+  geom_density() +
   theme_bw() +
   scale_color_manual(
     values = c("Dem" = "#3791FF", "Rep" = "#F6573E")
   )
 
-ws = fread("../cvr-ml/outputs/item_parameters.csv")
-
-ws[
-  item_name == "US PRESIDENT_FEDERAL" & class_name %in% c("DONALD J TRUMP", "HOWIE HAWKINS", "JO JORGENSEN", "JOSEPH R BIDEN", "UNDERVOTE"),
-  list (class_name, bias, discrimination, difficulty, w_0, w_1, w_2, w_3)
-  ]
+merged |> 
+  summarize(
+    p = mean(p_trump),
+    .by = topparty
+  )
