@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -69,16 +68,11 @@ class ConditionalEncoder(L.LightningModule):
         # code as tfidf
         #x = x * torch.log(x.shape[0] / torch.sum(x, 0))
 
-
         # concatenate the input data with the mask of missing values
         x = torch.cat([x, m], 1)
         # calculate m and mu based on encoder weights
         out = F.elu(self.dense1(x))
         out = self.bn1(out)
-        #out = F.elu(self.dense2(out))
-        #out = self.bn2(out)
-        #out = F.elu(self.dense3(out))
-        #out = self.bn3(out)
         mu =  self.densem(out)
         log_sigma = self.denses(out)
 
@@ -171,7 +165,7 @@ class EmbeddingEncoder(L.LightningModule):
         x: LongTensor [B, nitems]
         m: FloatTensor [B, nitems]
         """
-        B = x.shape[0]
+        # B = x.shape[0]
         device = x.device
         item_embs = []
         for i in range(self.n_items):
