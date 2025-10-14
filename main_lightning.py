@@ -37,9 +37,6 @@ def main():
 
     # 1) read ballots and build dataset
     p = VoteDataProcessor(filepath=DATA_PATH)
-
-    # return(p)
-
     Ks = p.get_n_classes_per_item()
 
     # 2) DataLoader
@@ -78,6 +75,7 @@ def main():
                 max_epochs=args.epochs, 
                 accelerator='auto', 
                 devices='auto', 
+                gpus = -1,
                 # precision="transformer-engine",
                 plugins=[SLURMEnvironment(requeue_signal=signal.SIGUSR1)]
             )
