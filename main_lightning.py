@@ -84,7 +84,6 @@ def main():
                 max_epochs=args.epochs, 
                 accelerator='auto', 
                 devices='auto', 
-                gpus = -1,
                 auto_requeue = False,
                 callbacks=[checkpoint_callback, stopping_callback]
                 # precision="transformer-engine",
