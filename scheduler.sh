@@ -4,9 +4,8 @@
 #SBATCH -p mit_normal_gpu
 #SBATCH -c 16
 #SBATCH --mem=128G
-#SBATCH --gres=gpu:h200:1
+#SBATCH --gres=gpu:h200:2
 #SBATCH --signal=SIGUSR1@360
-#SBATCH --time=05:30:00
 
 # Set up environment
 module load miniforge/24.3.0-0
@@ -14,8 +13,21 @@ module load cuda/12.4.0
 
 mamba activate cvr-ml
 
+# Function to handle timeout signal
+handle_timeout() {
+    echo "Job received timeout signal - will be resubmitted"
+    exit 124  # Special exit code for timeout
+}
+
+# Trap the timeout signal
+trap 'handle_timeout' SIGUSR1
+
 # Run your application
-srun python main_lightning.py --data data/colorado.parquet --batch-size=512 --latent-dims 1 --epochs 20
-# srun python main_lightning.py --data data/colorado.parquet --batch-size=512 --latent-dims 2 --epochs 20
-srun python main_lightning.py --data data/colorado.parquet --batch-size=512 --eval-only True --latent-dims 1
-#srun python main_lightning.py --data data/colorado.parquet --batch-size=512 --eval-only True --latent-dims 2
+set -e  # Exit on first error
+
+srun python main_lightning.py --data data/colorado.parquet --batch-size=512 --latent-dims 1 --epochs 15
+# srun python main_lightning.py --data data/colorado.parquet --batch-size=512 --eval-only True --latent-dims 1
+
+# If we get here, training completed successfully
+echo "Training completed successfully!"
+exit 0  # Success - no resubmission needed
