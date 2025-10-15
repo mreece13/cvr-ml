@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration
-MAX_SUBMISSIONS=5  # Maximum number of times to resubmit
+MAX_SUBMISSIONS=4  # Maximum number of times to resubmit
 SCRIPT_PATH=$1  # Path to the scheduler script
 LOG_DIR="slurm_logs"
 
@@ -16,7 +16,6 @@ submit_job() {
         # First submission (no dependency)
         jobid=$(sbatch --parsable \
                       --output="${LOG_DIR}/slurm-%j.out" \
-                      --error="${LOG_DIR}/slurm-%j.err" \
                       --job-name="cvr_iter${iteration}" \
                       $SCRIPT_PATH)
     else
@@ -25,7 +24,6 @@ submit_job() {
         # afterany: run after previous job completes (any exit status)
         jobid=$(sbatch --parsable \
                       --output="${LOG_DIR}/slurm-%j.out" \
-                      --error="${LOG_DIR}/slurm-%j.err" \
                       --job-name="cvr_iter${iteration}" \
                       --dependency=afternotok:${dep_jobid} \
                       $SCRIPT_PATH)
