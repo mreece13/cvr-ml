@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Configuration
-MAX_SUBMISSIONS=10  # Maximum number of times to resubmit
-SCRIPT_PATH="scheduler.sh"
+MAX_SUBMISSIONS=5  # Maximum number of times to resubmit
+SCRIPT_PATH=$1  # Path to the scheduler script
 LOG_DIR="slurm_logs"
 
 mkdir -p $LOG_DIR

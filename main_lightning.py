@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 from lightning.pytorch.plugins.environments import SLURMEnvironment
 import signal
+from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 
 def main():
     parser = argparse.ArgumentParser(description='Train CVAE on ballot data')
@@ -64,6 +66,13 @@ def main():
         n_samples=args.n_samples,
     )
 
+    checkpoint_callback = ModelCheckpoint(
+        monitor="val_loss",
+        save_on_train_epoch_end=True
+    )
+
+    stopping_callback = EarlyStopping(monitor="val_loss", mode="min")
+
     # better numerial stability for matmul, and supported only on Engaging
     # only set option if CUDA detected
     if torch.cuda.is_available():
@@ -76,17 +85,19 @@ def main():
                 accelerator='auto', 
                 devices='auto', 
                 gpus = -1,
+                auto_requeue = False,
+                callbacks=[checkpoint_callback, stopping_callback]
                 # precision="transformer-engine",
-                plugins=[SLURMEnvironment(requeue_signal=signal.SIGUSR1)]
+                # plugins=[SLURMEnvironment(requeue_signal=signal.SIGUSR1)]
             )
         else:
             trainer = L.Trainer(
                 max_epochs=args.epochs, 
                 accelerator='auto', 
-                devices='auto', 
+                devices='auto'
             )
 
-        trainer.fit(model)
+        trainer.fit(model, ckpt_path = "last")
     
     eval_dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False, drop_last=False)
     evaluate_and_export(model, p, eval_dl, file_name)
