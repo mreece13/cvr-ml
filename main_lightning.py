@@ -84,10 +84,8 @@ def main():
                 max_epochs=args.epochs, 
                 accelerator='auto', 
                 devices='auto', 
-                auto_requeue = False,
-                callbacks=[checkpoint_callback, stopping_callback]
-                # precision="transformer-engine",
-                # plugins=[SLURMEnvironment(requeue_signal=signal.SIGUSR1)]
+                callbacks=[checkpoint_callback, stopping_callback],
+                plugins=[SLURMEnvironment(auto_requeue=False)]
             )
         else:
             trainer = L.Trainer(
