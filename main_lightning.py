@@ -67,11 +67,11 @@ def main():
     )
 
     checkpoint_callback = ModelCheckpoint(
-        monitor="val_loss",
+        monitor="train_loss",
         save_on_train_epoch_end=True
     )
 
-    stopping_callback = EarlyStopping(monitor="val_loss", mode="min")
+    stopping_callback = EarlyStopping(monitor="train_loss", mode="min")
 
     # better numerial stability for matmul, and supported only on Engaging
     # only set option if CUDA detected
