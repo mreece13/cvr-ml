@@ -5,6 +5,7 @@
 #SBATCH -c 16
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:h200:2
+#SBATCH --time=06:00:00
 #SBATCH --signal=SIGUSR1@360
 
 # Set up environment
