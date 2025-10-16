@@ -26,8 +26,7 @@ trap 'handle_timeout' SIGUSR1
 # Run your application
 set -e  # Exit on first error
 
-srun python main_lightning.py --data data/colorado.parquet --batch-size=512 --latent-dims 1 --epochs 15
-# srun python main_lightning.py --data data/colorado.parquet --batch-size=512 --eval-only True --latent-dims 1
+srun python main_lightning.py --data data/colorado.parquet --batch-size=512 --latent-dims 2 --epochs 15
 
 # If we get here, training completed successfully
 echo "Training completed successfully!"
