@@ -25,13 +25,11 @@ class CholeskyLayer(nn.Module):
         self.weight = nn.Parameter(torch.eye(ndim))
         self.n_samples = n_samples
 
-
     def forward(self, theta):
         L = torch.tril(self.weight, -1) + torch.eye(self.weight.shape[0]).to(self.weight)
         L = L.repeat((self.n_samples, 1,1 ))
 
         theta_hat =  torch.bmm(theta, L)
-
 
         return theta_hat
 
@@ -237,6 +235,38 @@ class CVAE(L.LightningModule):
         self.beta = beta
         self.kl = 0
         self.n_samples = n_samples
+        
+        # Store reference to data processor (will be set externally)
+        self.data_processor = None
+
+    def set_data_processor(self, processor):
+        """
+        Set the data processor to be saved with checkpoints.
+        Call this after creating the model: model.set_data_processor(processor)
+        """
+        self.data_processor = processor
+
+    def on_save_checkpoint(self, checkpoint):
+        """
+        Called by PyTorch Lightning when saving a checkpoint.
+        Adds data processor state to the checkpoint.
+        """
+        if self.data_processor is not None:
+            checkpoint['data_processor'] = self.data_processor.state_dict()
+        return checkpoint
+
+    def on_load_checkpoint(self, checkpoint):
+        """
+        Called by PyTorch Lightning when loading a checkpoint.
+        Restores the data processor state if available.
+        """
+        if 'data_processor' in checkpoint:
+            if self.data_processor is None:
+                # Create new processor from saved state
+                self.data_processor = VoteDataProcessor.from_state_dict(checkpoint['data_processor'])
+            else:
+                # Update existing processor
+                self.data_processor.load_state_dict(checkpoint['data_processor'])
 
     def forward(self, x: torch.Tensor, m: torch.Tensor):
         """
@@ -266,7 +296,6 @@ class CVAE(L.LightningModule):
         self.log('train_loss',loss, prog_bar=True)
 
         return {'loss': loss}
-
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr, amsgrad=True)
@@ -426,3 +455,71 @@ class VoteDataProcessor:
 
     def get_n_classes_per_item(self):
         return self.n_classes_per_item
+    
+    def get_candidate_name(self, race_idx: int, class_idx: int) -> str:
+        """
+        Get the candidate name for a given race and class index.
+        """
+        race_name = self.idx_to_race[race_idx]
+        # Reverse lookup in candidate_maps
+        cmap = self.candidate_maps[race_name]
+        for candidate, idx in cmap.items():
+            if idx == class_idx:
+                return candidate
+        return None
+    
+    def get_all_candidates_for_race(self, race_idx: int) -> dict:
+        """
+        Get all candidates for a given race as {class_idx: candidate_name}
+        """
+        race_name = self.idx_to_race[race_idx]
+        cmap = self.candidate_maps[race_name]
+        # Return reversed map: class_idx -> candidate_name
+        return {idx: candidate for candidate, idx in cmap.items()}
+    
+    def state_dict(self):
+        """
+        Return a dictionary containing all the state needed to reconstruct this processor.
+        This allows checkpointing of the data processor along with the model.
+        """
+        return {
+            'key_cols': self.key_cols,
+            'race_col': self.race_col,
+            'candidate_col': self.candidate_col,
+            'race_to_idx': self.race_to_idx,
+            'idx_to_race': self.idx_to_race,
+            'nitems': self.nitems,
+            'candidate_maps': self.candidate_maps,
+            'n_classes_per_item': self.n_classes_per_item,
+            'data_tensor': self.data_tensor,
+            'mask_tensor': self.mask_tensor,
+            'index': self.index,
+        }
+    
+    def load_state_dict(self, state_dict):
+        """
+        Load processor state from a state dictionary.
+        This restores all mappings, tensors, and metadata.
+        """
+        self.key_cols = state_dict['key_cols']
+        self.race_col = state_dict['race_col']
+        self.candidate_col = state_dict['candidate_col']
+        self.race_to_idx = state_dict['race_to_idx']
+        self.idx_to_race = state_dict['idx_to_race']
+        self.nitems = state_dict['nitems']
+        self.candidate_maps = state_dict['candidate_maps']
+        self.n_classes_per_item = state_dict['n_classes_per_item']
+        self.data_tensor = state_dict['data_tensor']
+        self.mask_tensor = state_dict['mask_tensor']
+        self.index = state_dict['index']
+    
+    @classmethod
+    def from_state_dict(cls, state_dict):
+        """
+        Create a new VoteDataProcessor instance from a saved state dict.
+        Usage: processor = VoteDataProcessor.from_state_dict(saved_state)
+        """
+        # Create empty instance without calling __init__
+        instance = cls.__new__(cls)
+        instance.load_state_dict(state_dict)
+        return instance

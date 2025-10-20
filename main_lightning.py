@@ -65,6 +65,9 @@ def main():
         encoder_emb_dim=args.emb_dim,
         n_samples=args.n_samples,
     )
+    
+    # Attach data processor for checkpointing
+    model.set_data_processor(p)
 
     checkpoint_callback = ModelCheckpoint(
         monitor="train_loss",
