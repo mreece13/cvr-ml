@@ -93,7 +93,6 @@ xwalk = raw |>
   )
 
 merged = raw |> 
-  # mutate(id = cur_group_id(), .by = c(county_name, cvr_id)) |> 
   # filter(str_detect(race, "US PRESIDENT|US SENATE|US HOUSE")) |> 
   filter(race == "US PRESIDENT_FEDERAL") |> 
   mutate(
@@ -107,11 +106,50 @@ merged = raw |>
   left_join(
     xwalk, join_by(state, county_name, cvr_id == cvr_id...3)
   ) |> 
+  left_join(
+    fread("~/Dropbox (MIT)/Research/cvr-ideals/data/adams_voterlatents.csv", select = c(2,4,6)),
+    join_by(county_name, cvr_id)
+  ) |> 
   select(-cvr_id, cvr_id = cvr_id...4)
 
 merged |> 
   filter(topparty != "Other") |>
   ggplot(aes(x = z0, fill = topparty)) +
+  ggdist::stat_slab(alpha = 0.8) +
+  theme_bw() +
+  scale_fill_manual(
+    values = c("Dem" = "#3791FF", "Rep" = "#F6573E", "Other" = "grey50"),
+    labels = c("Dem" = "Joseph R Biden", "Rep" = "Donald J Trump", "Other" = "Other")
+  ) +
+  labs(
+    x = "Dim 0",
+    y = "",
+    fill = ""
+  ) +
+  theme(
+    axis.text.x = element_text(size=12),
+    axis.title.x = element_text(size=12),
+    axis.ticks.y = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid = element_blank(),
+    axis.text.y = element_blank(),
+    panel.background  = element_blank(),
+    panel.border = element_blank(),
+    plot.background = element_blank(),
+    axis.line.x.bottom = element_line(color = "black"),
+    legend.box.background = element_rect(fill=NA, color=NA),
+    legend.key = element_rect(fill=NA, color=NA, linewidth = 2),
+    legend.text = element_text(color = "black", size = 12),
+    legend.title = element_text(color = "black", size = 14),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+  )
+
+ggsave("figs/colorado_pres_latent_dim0_by_party.jpg", width = 6, height = 4, units = "in")
+
+merged |> 
+  filter(topparty != "Other") |>
+  ggplot(aes(x = z1, fill = topparty)) +
   ggdist::stat_slab(alpha = 0.5) +
   theme_bw() +
   scale_fill_manual(
@@ -119,51 +157,40 @@ merged |>
   )
 
 merged |> 
+  drop_na(mean) |> 
+  mutate(
+    mean_scaled = as.numeric(scale(mean)),
+    z0_scaled = as.numeric(scale(z0)),
+    # z1_scaled = as.numeric(scale(z1))
+  ) |> 
   filter(topparty != "Other") |> 
+  ggplot(aes(x = z0_scaled, y = mean_scaled)) + 
+  geom_point(alpha = 0.2) +
+  theme_bw() +
+  labs(
+    x = "VAE Estimates (Scaled)",
+    y = "IRT Estimates (Scaled)"
+  ) +
+  coord_equal(clip = "on")
+
+ggsave("figs/vae_vs_irt_colorado_dim1.jpg", width = 6, height = 6, units = "in")
+
+merged |> 
+  filter(topparty != "Other") |> 
+  mutate(
+    z0 = -1*z0
+  ) |> 
   ggplot(aes(x = z0, y = z1, color = topparty)) +
   geom_density2d() +
+  facet_grid(~ topparty) +
   theme_bw() +
   scale_color_manual(
     values = c("Dem" = "#3791FF", "Rep" = "#F6573E")
   )
 
-ws = fread("outputs/batch_size512_latent_dims1_hidden_size64_emb_dim16_lr0.001_epochs20_n_samples1_item_parameters.csv")
+ws = fread("outputs/batch_size512_latent_dims2_hidden_size64_emb_dim16_lr0.001_epochs20_n_samples1_item_parameters.csv")
 
 ws[
   item_name == "US PRESIDENT_FEDERAL" & class_name %in% c("DONALD J TRUMP", "HOWIE HAWKINS", "JO JORGENSEN", "JOSEPH R BIDEN", "UNDERVOTE", "GLORIA LA RIVA"),
-  list (class_name, bias, discrimination, difficulty, w_0, w_1, w_2, w_3)
+  list (class_name, bias, discrimination, difficulty, w_0, w_1)
   ]
-
-
-s = fread("../cvr-ml/outputs/voter_scores.csv")
-
-merged = raw |> 
-  mutate(id = cur_group_id(), .by = c(county_name, cvr_id)) |> 
-  filter(str_detect(race, "US PRESIDENT|US SENATE|US HOUSE")) |> 
-  mutate(
-    topparty = case_when(
-      all(party_detailed == "DEMOCRAT") ~ "Dem",
-      all(party_detailed == "REPUBLICAN") ~ "Rep",
-      .default = "Other"
-    ),
-    .by = c(state, county_name, cvr_id)
-  ) |> 
-  distinct(state, county_name, cvr_id, topparty, id) |> 
-  left_join(
-    mutate(s, id = row_number()), join_by(id)
-  )
-
-merged |> 
-  filter(topparty != "Other") |> 
-  ggplot(aes(x = z0, color = topparty)) +
-  geom_density() +
-  theme_bw() +
-  scale_color_manual(
-    values = c("Dem" = "#3791FF", "Rep" = "#F6573E")
-  )
-
-merged |> 
-  summarize(
-    p = mean(p_trump),
-    .by = topparty
-  )
