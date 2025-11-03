@@ -11,14 +11,14 @@ from model import CVAE, VoteDataProcessor
 # ============================================================================
 # CONFIGURATION - Update these paths
 # ============================================================================
-CHECKPOINT_PATH = "lightning_logs/version_2/checkpoints/epoch=19-step=128340.ckpt"
+CHECKPOINT_PATH = '/Users/mason/Dropbox (MIT)/Research/cvr-ml/lightning_logs/version_0/checkpoints/epoch=0-step=3209.ckpt'
 OUTPUT_DIR = "embedding_analysis"
 
 # ============================================================================
 # Load Model and Processor
 # ============================================================================
 print("Loading checkpoint...")
-checkpoint = torch.load(CHECKPOINT_PATH, map_location='cpu')
+checkpoint = torch.load(CHECKPOINT_PATH, map_location='cpu', weights_only=False)
 
 if 'data_processor' in checkpoint:
     processor = VoteDataProcessor.from_state_dict(checkpoint['data_processor'])
@@ -27,11 +27,16 @@ else:
     raise ValueError("Checkpoint missing data processor. Use a newer checkpoint.")
 
 model = CVAE.load_from_checkpoint(
-    CHECKPOINT_PATH,
+    CHECKPOINT_PATH, 
     map_location='cpu',
-    dataloader=None,
+    dataloader=None, 
     nitems=processor.nitems,
-    n_classes_per_item=processor.get_n_classes_per_item(),
+    n_classes_per_item=processor.get_n_classes_per_item(), 
+    latent_dims=2, 
+    hidden_layer_size=64, 
+    qm=None, 
+    learning_rate=1e-3, 
+    batch_size=512
 )
 model.eval()
 print("✓ Model loaded")
@@ -213,7 +218,7 @@ print("\n" + "="*80)
 print("EXAMPLE: Cluster 'US PRESIDENT_FEDERAL' candidates")
 print("="*80)
 try:
-    clustered = cluster_race("US PRESIDENT_FEDERAL", n_clusters=2)
+    clustered = cluster_race("US PRESIDENT_FEDERAL", n_clusters=4)
 except Exception as e:
     print(f"Could not cluster: {e}")
 

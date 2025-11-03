@@ -348,7 +348,7 @@ def main():
     
     # Load model and processor
     print(f"Loading checkpoint: {args.checkpoint}")
-    checkpoint = torch.load(args.checkpoint, map_location='cpu')
+    checkpoint = torch.load(args.checkpoint, map_location='cpu', weights_only=False)
     
     # Load processor from checkpoint if available, otherwise from data file
     if 'data_processor' in checkpoint:
@@ -363,11 +363,16 @@ def main():
     
     # Load model
     model = CVAE.load_from_checkpoint(
-        args.checkpoint,
+        args.checkpoint, 
         map_location='cpu',
-        dataloader=None,  # Not needed for inference
+        dataloader=None, 
         nitems=processor.nitems,
-        n_classes_per_item=processor.get_n_classes_per_item(),
+        n_classes_per_item=processor.get_n_classes_per_item(), 
+        latent_dims=2, 
+        hidden_layer_size=64, 
+        qm=None, 
+        learning_rate=1e-3, 
+        batch_size=512
     )
     model.eval()
     print("Model loaded successfully")
