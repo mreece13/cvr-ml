@@ -204,6 +204,7 @@ class CVAE(L.LightningModule):
         :param qm: IxD Q-matrix specifying which items i<I load on which dimensions d<D
         """
         super(CVAE, self).__init__()
+        self.save_hyperparameters()
 
         self.nitems = nitems
         self.latent_dims = latent_dims
@@ -421,6 +422,18 @@ class VoteDataProcessor:
             return self.candidate_maps[r].get(c, 0)
 
         self._raw['_class_idx'] = self._raw.apply(map_row, axis=1)
+
+        # Check for duplicate entries before pivoting
+        index_cols = self.key_cols + [self.race_col]
+        duplicates = self._raw[self._raw.duplicated(subset=index_cols, keep=False)]
+        if not duplicates.empty:
+            print(f"\n⚠️  WARNING: Found {len(duplicates)} duplicate entries in the data!")
+            print(f"Duplicate keys (showing first 50):")
+            print(duplicates[index_cols + [self.candidate_col]].sort_values(by=index_cols).head(50))
+            print(f"\nUnique duplicate keys: {duplicates[index_cols].drop_duplicates().shape[0]}")
+            # Optionally save to CSV for inspection
+            duplicates.to_csv('duplicate_entries.csv', index=False)
+            print("Full duplicates saved to: duplicate_entries.csv")
 
         # pivot into wide format: index is the ballot key, columns are races
         pivot = self._raw.set_index(self.key_cols + [self.race_col])['_class_idx'].unstack(level=self.race_col)
