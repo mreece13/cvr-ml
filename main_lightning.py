@@ -43,16 +43,18 @@ def main():
 
     # 2) DataLoader
     ds = p.get_torch_dataset()
+    print("---------- Loading DataLoader ----------")
     dl = DataLoader(
-        ds, 
+        ds,
         batch_size=args.batch_size, 
-        shuffle=True, 
-        drop_last=False, 
-        num_workers=8, 
+        shuffle=True,
+        drop_last=False,
+        num_workers=2,
         persistent_workers=True
     )
 
     # 3) instantiate CVAE
+    print("---------- Loading CVAE ----------")
     model = CVAE(
         dataloader=dl,
         nitems=p.nitems,
@@ -81,22 +83,16 @@ def main():
     if torch.cuda.is_available():
         torch.set_float32_matmul_precision('high')
 
+    print("---------- Building Trainer ----------")
     if not args.eval_only:
-        if torch.cuda.is_available():
-            trainer = L.Trainer(
-                max_epochs=args.epochs, 
-                accelerator='auto', 
-                devices='auto', 
-                callbacks=[checkpoint_callback, stopping_callback],
-                plugins=[SLURMEnvironment(auto_requeue=False)]
-            )
-        else:
-            trainer = L.Trainer(
-                max_epochs=args.epochs, 
-                accelerator='auto', 
-                devices='auto'
-            )
-
+        trainer = L.Trainer(
+            max_epochs=args.epochs, 
+            accelerator='auto', 
+            devices='auto', 
+            callbacks=[checkpoint_callback, stopping_callback]
+        )
+        
+        print("---------- Fitting ----------")
         trainer.fit(model, ckpt_path = "last")
     
     eval_dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False, drop_last=False)
