@@ -1,25 +1,24 @@
 import argparse
 import lightning as L
 import torch
-from model import CVAE, VoteDataProcessor
+from model import CVAE, VAEDataModule
 from torch.utils.data import DataLoader
 import os
 import numpy as np
 import pandas as pd
 from lightning.pytorch.plugins.environments import SLURMEnvironment
-import signal
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 
 def main():
     parser = argparse.ArgumentParser(description='Train CVAE on ballot data')
-    parser.add_argument('--data', type=str, default='data/colorado.parquet')
-    parser.add_argument('--batch-size', type=int, default=128)
-    parser.add_argument('--latent-dims', type=int, default=4)
+    parser.add_argument('--data', type=str, default='data/colorado2.parquet')
+    parser.add_argument('--batch-size', type=int, default=256)
+    parser.add_argument('--latent-dims', type=int, default=2)
     parser.add_argument('--hidden-size', type=int, default=64)
     parser.add_argument('--emb-dim', type=int, default=16)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--epochs', type=int, default=20)
     parser.add_argument('--n-samples', type=int, default=1)
     parser.add_argument('--eval-only', type=bool, default=False)
     args = parser.parse_args()
@@ -34,42 +33,42 @@ def main():
     print(f"Generated file name: {file_name}")
 
     DATA_PATH = args.data
-    if not DATA_PATH:
-        raise RuntimeError('Set DATA_PATH (or pass --data) to your ballots file before running training')
 
     # 1) read ballots and build dataset (with caching)
-    p = VoteDataProcessor(filepath=DATA_PATH, cache_dir="data_cache")
-    Ks = p.get_n_classes_per_item()
+    dm = VAEDataModule(filepath=DATA_PATH, batch_size=args.batch_size)
+    dm.prepare_data()
+    dm.setup()
+    # p = VoteDataProcessor(filepath=DATA_PATH)
 
     # 2) DataLoader
-    ds = p.get_torch_dataset()
+    # ds = p.get_torch_dataset()
     print("---------- Loading DataLoader ----------")
-    dl = DataLoader(
-        ds,
-        batch_size=args.batch_size, 
-        shuffle=True,
-        drop_last=False,
-        num_workers=1,
-        persistent_workers=True
-    )
+    # dl = DataLoader(
+    #     ds,
+    #     batch_size=args.batch_size, 
+    #     shuffle=True,
+    #     drop_last=False,
+    #     num_workers=1,
+    #     persistent_workers=True
+    # )
 
     # 3) instantiate CVAE
     print("---------- Loading CVAE ----------")
     model = CVAE(
-        dataloader=dl,
-        nitems=p.nitems,
+        # dataloader=dl,
+        nitems=dm.nitems,
         latent_dims=args.latent_dims,
         hidden_layer_size=args.hidden_size,
         qm=None,
         learning_rate=args.lr,
         batch_size=args.batch_size,
-        n_classes_per_item=Ks,
+        n_classes_per_item=dm.n_classes_per_item,
         encoder_emb_dim=args.emb_dim,
         n_samples=args.n_samples,
     )
     
     # Attach data processor for checkpointing
-    model.set_data_processor(p)
+    # model.set_data_processor(p)
 
     checkpoint_callback = ModelCheckpoint(
         monitor="train_loss",
@@ -80,9 +79,8 @@ def main():
     stopping_callback = EarlyStopping(monitor="train_loss", mode="min")
 
     # better numerial stability for matmul, and supported only on Engaging
-    # only set option if CUDA detected
-    if torch.cuda.is_available():
-        torch.set_float32_matmul_precision('high')
+    # if torch.cuda.is_available():
+        # torch.set_float32_matmul_precision('high')
 
     print("---------- Building Trainer ----------")
     if not args.eval_only:
@@ -95,13 +93,13 @@ def main():
         )
         
         print("---------- Fitting ----------")
-        trainer.fit(model, ckpt_path = "last")
+        trainer.fit(model, ckpt_path = "last", datamodule = dm)
     
-    eval_dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False, drop_last=False)
-    evaluate_and_export(model, p, eval_dl, file_name)
+    # eval_dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False, drop_last=False)
+    # evaluate_and_export(model, p, eval_dl, file_name)
 
 def evaluate_and_export(model: torch.nn.Module,
-                        processor: VoteDataProcessor,
+                        processor: None, # VoteDataProcessor
                         dl: DataLoader,
                         file_name: str,
                         out_dir: str = "outputs",

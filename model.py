@@ -3,6 +3,9 @@ from torch import nn
 import torch.nn.functional as F
 import lightning as L
 import pandas as pd
+import polars as pl
+import time
+from pathlib import Path
 
 class SamplingLayer(L.LightningModule):
     """
@@ -186,7 +189,7 @@ class CVAE(L.LightningModule):
     Neural network for the conditional variational autoencoder
     """
     def __init__(self,
-                 dataloader,
+                #  dataloader,
                  nitems: int,
                  latent_dims: int,
                  hidden_layer_size: int,
@@ -209,7 +212,7 @@ class CVAE(L.LightningModule):
         self.nitems = nitems
         self.latent_dims = latent_dims
         self.hidden_layer_size = hidden_layer_size
-        self.dataloader = dataloader
+        # self.dataloader = dataloader
 
         # encoder: embedding-based so it accepts integer labels and a mask
         self.encoder = EmbeddingEncoder(
@@ -238,36 +241,36 @@ class CVAE(L.LightningModule):
         self.n_samples = n_samples
         
         # Store reference to data processor (will be set externally)
-        self.data_processor = None
+        # self.data_processor = None
 
-    def set_data_processor(self, processor):
-        """
-        Set the data processor to be saved with checkpoints.
-        Call this after creating the model: model.set_data_processor(processor)
-        """
-        self.data_processor = processor
+    # def set_data_processor(self, processor):
+    #     """
+    #     Set the data processor to be saved with checkpoints.
+    #     Call this after creating the model: model.set_data_processor(processor)
+    #     """
+    #     self.data_processor = processor
 
-    def on_save_checkpoint(self, checkpoint):
-        """
-        Called by PyTorch Lightning when saving a checkpoint.
-        Adds data processor state to the checkpoint.
-        """
-        if self.data_processor is not None:
-            checkpoint['data_processor'] = self.data_processor.state_dict()
-        return checkpoint
+    # def on_save_checkpoint(self, checkpoint):
+    #     """
+    #     Called by PyTorch Lightning when saving a checkpoint.
+    #     Adds data processor state to the checkpoint.
+    #     """
+    #     if self.data_processor is not None:
+    #         checkpoint['data_processor'] = self.data_processor.state_dict()
+    #     return checkpoint
 
-    def on_load_checkpoint(self, checkpoint):
-        """
-        Called by PyTorch Lightning when loading a checkpoint.
-        Restores the data processor state if available.
-        """
-        if 'data_processor' in checkpoint:
-            if self.data_processor is None:
-                # Create new processor from saved state
-                self.data_processor = VoteDataProcessor.from_state_dict(checkpoint['data_processor'])
-            else:
-                # Update existing processor
-                self.data_processor.load_state_dict(checkpoint['data_processor'])
+    # def on_load_checkpoint(self, checkpoint):
+    #     """
+    #     Called by PyTorch Lightning when loading a checkpoint.
+    #     Restores the data processor state if available.
+    #     """
+    #     if 'data_processor' in checkpoint:
+    #         if self.data_processor is None:
+    #             # Create new processor from saved state
+    #             self.data_processor = VoteDataProcessor.from_state_dict(checkpoint['data_processor'])
+    #         else:
+    #             # Update existing processor
+    #             self.data_processor.load_state_dict(checkpoint['data_processor'])
 
     def forward(self, x: torch.Tensor, m: torch.Tensor):
         """
@@ -301,8 +304,8 @@ class CVAE(L.LightningModule):
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr, amsgrad=True)
 
-    def train_dataloader(self):
-        return self.dataloader
+    # def train_dataloader(self):
+    #     return self.dataloader
 
     def loss(self, input, reco, mask, mu, sigma, z):
         # calculate log likelihood for categorical outputs
@@ -390,139 +393,127 @@ class VoteDataProcessor:
     """
     def __init__(self, filepath: str = None, df: pd.DataFrame = None,
                  key_cols=('state', 'county_name', 'cvr_id'),
-                 race_col='race', candidate_col='candidate',
-                 cache_dir: str = None,
-                 force_rebuild: bool = False):
+                 race_col='race', candidate_col='candidate'):
         if df is None and filepath is None:
             raise ValueError('Either filepath or df must be provided')
 
-        # Try to load from cache first
-        if cache_dir and filepath and not force_rebuild:
-            import os
-            import pickle
-            import hashlib
-            
-            os.makedirs(cache_dir, exist_ok=True)
-            
-            # Create cache key from filepath and parameters
-            cache_key = hashlib.md5(
-                f"{filepath}_{key_cols}_{race_col}_{candidate_col}".encode()
-            ).hexdigest()
-            cache_path = os.path.join(cache_dir, f"processor_{cache_key}.pkl")
-            
-            if os.path.exists(cache_path):
-                print(f"Loading cached processor from: {cache_path}")
-                try:
-                    with open(cache_path, 'rb') as f:
-                        cached_state = pickle.load(f)
-                    self.load_state_dict(cached_state)
-                    print(f"✓ Loaded cached processor ({len(self.data_tensor)} ballots, {self.nitems} races)")
-                    return
-                except Exception as e:
-                    print(f"Warning: Failed to load cache ({e}), rebuilding...")
-
-        # Build processor from scratch
-        print(f"Building VoteDataProcessor from: {filepath or 'DataFrame'}")
         import time
         t0 = time.time()
-        
-        if df is None:
-            if filepath.endswith('.parquet'):
-                df = pd.read_parquet(filepath)
-            else:
-                df = pd.read_csv(filepath)
-        print(f"  - Loaded raw data: {len(df)} rows in {time.time()-t0:.1f}s")
 
+        df_lazy = pl.scan_parquet(filepath)
         t1 = time.time()
-        self._raw = df.copy()
+
         self.key_cols = list(key_cols)
         self.race_col = race_col
         self.candidate_col = candidate_col
 
-        # build race -> item index
-        races = sorted(self._raw[self.race_col].unique())
+        # Collect only what we need for race mappings
+        races = sorted(df_lazy.select(self.race_col).unique().collect()[self.race_col].to_list())
         self.race_to_idx = {r: i for i, r in enumerate(races)}
         self.idx_to_race = races
         self.nitems = len(races)
-        print(f"  - Found {self.nitems} races in {time.time()-t1:.1f}s")
 
-        # build per-race candidate mappings
+        # Build per-race candidate mappings (collect grouped data efficiently)
         t1 = time.time()
+        race_candidates = (
+            df_lazy
+            .group_by(self.race_col)
+            .agg(pl.col(self.candidate_col).unique().sort())
+            .sort(self.race_col)
+            .collect()  # Collect this small aggregated result
+        )
+
         self.candidate_maps = {}
         self.n_classes_per_item = []
-        for r in races:
-            vals = sorted(self._raw.loc[self._raw[self.race_col] == r, self.candidate_col].unique())
+        for row in race_candidates.iter_rows(named=True):
+            r = row[self.race_col]
+            vals = row[self.candidate_col]
             cmap = {c: i for i, c in enumerate(vals)}
             self.candidate_maps[r] = cmap
             self.n_classes_per_item.append(len(vals))
-        print(f"  - Built candidate mappings in {time.time()-t1:.1f}s")
 
-        # map candidate -> class index per row
+        # Map candidate -> class index
         t1 = time.time()
-        def map_row(row):
-            r = row[self.race_col]
-            c = row[self.candidate_col]
-            return self.candidate_maps[r].get(c, 0)
+        mapping_data = []
+        for race, cmap in self.candidate_maps.items():
+            for candidate, idx in cmap.items():
+                mapping_data.append({
+                    self.race_col: race,
+                    self.candidate_col: candidate,
+                    '_class_idx': idx
+                })
+        mapping_df = pl.DataFrame(mapping_data).lazy()
 
-        self._raw['_class_idx'] = self._raw.apply(map_row, axis=1)
-        print(f"  - Mapped candidates to class indices in {time.time()-t1:.1f}s")
+        # Join lazily - query optimization happens here
+        df_with_class = (
+            df_lazy
+            .join(mapping_df, on=[self.race_col, self.candidate_col], how='left')
+            .with_columns(pl.col('_class_idx').fill_null(0))
+        )
 
-        # Check for duplicate entries before pivoting
+        # Check for duplicates (collect only duplicate check)
         t1 = time.time()
         index_cols = self.key_cols + [self.race_col]
-        duplicates = self._raw[self._raw.duplicated(subset=index_cols, keep=False)]
-        if not duplicates.empty:
-            unique_dup_keys = duplicates[index_cols].drop_duplicates().sort_values(by=index_cols)
+        duplicates = (
+            df_with_class
+            .filter(pl.struct(index_cols).is_duplicated())
+            .collect()
+        )
+
+        if len(duplicates) > 0:
+            unique_dup_keys = duplicates.select(index_cols).unique().sort(index_cols)
             print(f"\n⚠️  WARNING: Found {len(duplicates)} duplicate entries!")
             print(f"Unique duplicate keys:\n")
-            print(unique_dup_keys.head(50).to_string(index=False))
-            duplicates.to_csv('duplicate_entries.csv', index=False)
+            print(unique_dup_keys.head(50))
+            duplicates.write_csv('duplicate_entries.csv')
             print(f"Full duplicates saved to: duplicate_entries.csv\n")
 
-        # pivot into wide format: index is the ballot key, columns are races
+        # Collect before pivot
         t1 = time.time()
-        pivot = self._raw.set_index(self.key_cols + [self.race_col])['_class_idx'].unstack(level=self.race_col)
-        print(f"  - Pivoted data in {time.time()-t1:.1f}s")
+        df_collected = df_with_class.collect()
+        # self._raw = df_collected.clone()
 
-        # ensure columns are in the same race order
-        pivot = pivot.reindex(columns=self.idx_to_race)
+        pivot = df_collected.pivot(
+            values='_class_idx',
+            index=self.key_cols,
+            columns=self.race_col,
+            aggregate_function='first'
+        )
 
-        # mask of observed entries
-        mask = (~pivot.isna()).astype(int)
+        # Ensure columns are in the same race order
+        race_cols = [col for col in pivot.columns if col not in self.key_cols]
+        ordered_race_cols = [r for r in self.idx_to_race if r in race_cols]
+        pivot = pivot.select(self.key_cols + ordered_race_cols)
 
-        # fill missing with 0 (safe because mask will zero-out contribution)
-        pivot_filled = pivot.fillna(0).astype(int)
-
-        # store as tensors
+        # Create mask and fill (these are fast eager operations)
         t1 = time.time()
-        self.data_tensor = torch.from_numpy(pivot_filled.values).long()
-        self.mask_tensor = torch.from_numpy(mask.values).float()
-        print(f"  - Converted to tensors in {time.time()-t1:.1f}s")
+        race_data_cols = ordered_race_cols
 
-        # keep the index (ballot ids)
-        self.index = pivot_filled.index
+        # Create mask: 1 where not null, 0 where null
+        mask = pivot.select([
+            pl.col(col).is_not_null().cast(pl.Float32).alias(col) 
+            for col in race_data_cols
+        ])
+
+        # Fill nulls with 0 and ensure integer type
+        pivot_filled = pivot.select(
+            self.key_cols + [
+                pl.col(col).fill_null(0).cast(pl.Int64).alias(col)
+                for col in race_data_cols
+            ]
+        )
+
+        # Convert to tensors
+        data_array = pivot_filled.select(race_data_cols).to_numpy()
+        mask_array = mask.to_numpy()
+
+        self.data_tensor = torch.from_numpy(data_array).long()
+        self.mask_tensor = torch.from_numpy(mask_array).float()
+
+        # Keep the index
+        self.index = pivot_filled.select(self.key_cols)
 
         print(f"✓ Processor built: {len(self.data_tensor)} ballots, {self.nitems} races (total: {time.time()-t0:.1f}s)")
-
-        # Save to cache if requested
-        if cache_dir and filepath:
-            import os
-            import pickle
-            import hashlib
-            
-            os.makedirs(cache_dir, exist_ok=True)
-            cache_key = hashlib.md5(
-                f"{filepath}_{key_cols}_{race_col}_{candidate_col}".encode()
-            ).hexdigest()
-            cache_path = os.path.join(cache_dir, f"processor_{cache_key}.pkl")
-            
-            try:
-                t1 = time.time()
-                with open(cache_path, 'wb') as f:
-                    pickle.dump(self.state_dict(), f, protocol=pickle.HIGHEST_PROTOCOL)
-                print(f"✓ Saved cache to: {cache_path} ({time.time()-t1:.1f}s)")
-            except Exception as e:
-                print(f"Warning: Failed to save cache: {e}")
 
     def get_tensors(self):
         """Return (data_tensor, mask_tensor)
@@ -560,49 +551,195 @@ class VoteDataProcessor:
         # Return reversed map: class_idx -> candidate_name
         return {idx: candidate for candidate, idx in cmap.items()}
     
-    def state_dict(self):
-        """
-        Return a dictionary containing all the state needed to reconstruct this processor.
-        This allows checkpointing of the data processor along with the model.
-        """
-        return {
-            'key_cols': self.key_cols,
-            'race_col': self.race_col,
-            'candidate_col': self.candidate_col,
-            'race_to_idx': self.race_to_idx,
-            'idx_to_race': self.idx_to_race,
-            'nitems': self.nitems,
-            'candidate_maps': self.candidate_maps,
-            'n_classes_per_item': self.n_classes_per_item,
-            'data_tensor': self.data_tensor,
-            'mask_tensor': self.mask_tensor,
-            'index': self.index,
-        }
+class VAEDataModule(L.LightningDataModule):
+    """
+    PyTorch Lightning DataModule for CVAE training
+    """
+    def __init__(self, filepath: str = None,
+                 key_cols=('state', 'county_name', 'cvr_id'),
+                 race_col='race', candidate_col='candidate', batch_size: int = 128):
+        super().__init__()
+        self.batch_size = batch_size
+        self.filepath = filepath
+        self.key_cols = list(key_cols)
+        self.race_col = race_col
+        self.candidate_col = candidate_col
+
+    def prepare_data(self):
+        # Only do one-time operations here, like checking if file exists
+        # Do NOT set any instance variables
+        if self.filepath and not Path(self.filepath).exists():
+            raise FileNotFoundError(f"Data file not found: {self.filepath}")
+
+    def setup(self, stage=None):
+        df_lazy = pl.scan_parquet(self.filepath)
+
+        # Collect only what we need for race mappings
+        races = sorted(df_lazy.select(self.race_col).unique().collect()[self.race_col].to_list())
+        self.race_to_idx = {r: i for i, r in enumerate(races)}
+        self.idx_to_race = races
+        self.nitems = len(races)
+
+        # Build per-race candidate mappings (collect grouped data efficiently)
+        race_candidates = (
+            df_lazy
+            .group_by(self.race_col)
+            .agg(pl.col(self.candidate_col).unique().sort())
+            .sort(self.race_col)
+            .collect()  # Collect this small aggregated result
+        )
+
+        self.candidate_maps = {}
+        self.n_classes_per_item = []
+        for row in race_candidates.iter_rows(named=True):
+            r = row[self.race_col]
+            vals = row[self.candidate_col]
+            cmap = {c: i for i, c in enumerate(vals)}
+            self.candidate_maps[r] = cmap
+            self.n_classes_per_item.append(len(vals))
+
+        # Map candidate -> class index
+        mapping_data = []
+        for race, cmap in self.candidate_maps.items():
+            for candidate, idx in cmap.items():
+                mapping_data.append({
+                    self.race_col: race,
+                    self.candidate_col: candidate,
+                    '_class_idx': idx
+                })
+        mapping_df = pl.DataFrame(mapping_data).lazy()
+
+        # Join lazily - query optimization happens here
+        df_with_class = (
+            df_lazy
+            .join(mapping_df, on=[self.race_col, self.candidate_col], how='left')
+            .with_columns(pl.col('_class_idx').fill_null(0))
+        )
+
+        # Check for duplicates (collect only duplicate check)
+        index_cols = self.key_cols + [self.race_col]
+        duplicates = (
+            df_with_class
+            .filter(pl.struct(index_cols).is_duplicated())
+            .collect()
+        )
+
+        if len(duplicates) > 0:
+            unique_dup_keys = duplicates.select(index_cols).unique().sort(index_cols)
+            print(f"\nWARNING: Found {len(duplicates)} duplicate entries!")
+            print(f"Unique duplicate keys:\n")
+            print(unique_dup_keys.head(50))
+            duplicates.write_csv('duplicate_entries.csv')
+            print(f"Full duplicates saved to: duplicate_entries.csv\n")
+
+        # Collect before pivot
+        t1 = time.time()
+        df_collected = df_with_class.collect()
+        # self._raw = df_collected.clone()
+
+        pivot = df_collected.pivot(
+            values='_class_idx',
+            index=self.key_cols,
+            columns=self.race_col,
+            aggregate_function='first'
+        )
+
+        # Ensure columns are in the same race order
+        race_cols = [col for col in pivot.columns if col not in self.key_cols]
+        ordered_race_cols = [r for r in self.idx_to_race if r in race_cols]
+        pivot = pivot.select(self.key_cols + ordered_race_cols)
+
+        # Create mask and fill
+        race_data_cols = ordered_race_cols
+
+        # Create mask: 1 where not null, 0 where null
+        mask = pivot.select([
+            pl.col(col).is_not_null().cast(pl.Float32).alias(col) 
+            for col in race_data_cols
+        ])
+
+        # Fill nulls with 0 and ensure integer type
+        pivot_filled = pivot.select(
+            self.key_cols + [
+                pl.col(col).fill_null(0).cast(pl.Int64).alias(col)
+                for col in race_data_cols
+            ]
+        )
+
+        # Convert to tensors
+        data_array = pivot_filled.select(race_data_cols).to_numpy()
+        mask_array = mask.to_numpy()
+
+        self.data_tensor = torch.from_numpy(data_array).long()
+        self.mask_tensor = torch.from_numpy(mask_array).float()
+        
+        # Keep the index
+        self.index = pivot_filled.select(self.key_cols)
+        
+        # Create the actual dataset
+        self.dataset = torch.utils.data.TensorDataset(
+            self.data_tensor, 
+            self.mask_tensor
+        )
+
+    def train_dataloader(self):
+        return torch.utils.data.DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True, drop_last=False, num_workers=8)
     
-    def load_state_dict(self, state_dict):
-        """
-        Load processor state from a state dictionary.
-        This restores all mappings, tensors, and metadata.
-        """
-        self.key_cols = state_dict['key_cols']
-        self.race_col = state_dict['race_col']
-        self.candidate_col = state_dict['candidate_col']
-        self.race_to_idx = state_dict['race_to_idx']
-        self.idx_to_race = state_dict['idx_to_race']
-        self.nitems = state_dict['nitems']
-        self.candidate_maps = state_dict['candidate_maps']
-        self.n_classes_per_item = state_dict['n_classes_per_item']
-        self.data_tensor = state_dict['data_tensor']
-        self.mask_tensor = state_dict['mask_tensor']
-        self.index = state_dict['index']
+    ### Additional utility methods ###
     
-    @classmethod
-    def from_state_dict(cls, state_dict):
+    def get_candidate_name(self, race_idx: int, class_idx: int) -> str:
         """
-        Create a new VoteDataProcessor instance from a saved state dict.
-        Usage: processor = VoteDataProcessor.from_state_dict(saved_state)
+        Get the candidate name for a given race and class index.
         """
-        # Create empty instance without calling __init__
-        instance = cls.__new__(cls)
-        instance.load_state_dict(state_dict)
-        return instance
+        race_name = self.idx_to_race[race_idx]
+        # Reverse lookup in candidate_maps
+        cmap = self.candidate_maps[race_name]
+        for candidate, idx in cmap.items():
+            if idx == class_idx:
+                return candidate
+        return None
+    
+    def get_all_candidates_for_race(self, race_idx: int) -> dict:
+        """
+        Get all candidates for a given race as {class_idx: candidate_name}
+        """
+        race_name = self.idx_to_race[race_idx]
+        cmap = self.candidate_maps[race_name]
+        # Return reversed map: class_idx -> candidate_name
+        return {idx: candidate for candidate, idx in cmap.items()}
+    
+    # def state_dict(self):
+    #     """
+    #     Return a dictionary containing all the state needed to reconstruct this processor.
+    #     This allows checkpointing of the data processor along with the model.
+    #     """
+    #     return {
+    #         'key_cols': self.key_cols,
+    #         'race_col': self.race_col,
+    #         'candidate_col': self.candidate_col,
+    #         'race_to_idx': self.race_to_idx,
+    #         'idx_to_race': self.idx_to_race,
+    #         'nitems': self.nitems,
+    #         'candidate_maps': self.candidate_maps,
+    #         'n_classes_per_item': self.n_classes_per_item,
+    #         'data_tensor': self.data_tensor,
+    #         'mask_tensor': self.mask_tensor,
+    #         'index': self.index,
+    #     }
+    
+    # def load_state_dict(self, state_dict):
+    #     """
+    #     Load processor state from a state dictionary.
+    #     This restores all mappings, tensors, and metadata.
+    #     """
+    #     self.key_cols = state_dict['key_cols']
+    #     self.race_col = state_dict['race_col']
+    #     self.candidate_col = state_dict['candidate_col']
+    #     self.race_to_idx = state_dict['race_to_idx']
+    #     self.idx_to_race = state_dict['idx_to_race']
+    #     self.nitems = state_dict['nitems']
+    #     self.candidate_maps = state_dict['candidate_maps']
+    #     self.n_classes_per_item = state_dict['n_classes_per_item']
+    #     self.data_tensor = state_dict['data_tensor']
+    #     self.mask_tensor = state_dict['mask_tensor']
+    #     self.index = state_dict['index']
