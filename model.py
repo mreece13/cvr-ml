@@ -378,23 +378,62 @@ class VoteDataProcessor:
       - a pivoted integer matrix of shape (N_ballots, nitems) with class indices
       - a mask of shape (N_ballots, nitems) with 1 for observed, 0 for missing
 
+    Caching:
+      - If cache_dir is provided, saves processed state to disk
+      - On subsequent runs, loads from cache instead of re-processing
+      - Cache filename derived from input filepath
+
     Example usage:
-      p = VoteDataProcessor("ballots.csv")
+      p = VoteDataProcessor("ballots.csv", cache_dir="data_cache")
       data_tensor, mask_tensor = p.get_tensors()
       dataset = p.get_torch_dataset()
     """
     def __init__(self, filepath: str = None, df: pd.DataFrame = None,
                  key_cols=('state', 'county_name', 'cvr_id'),
-                 race_col='race', candidate_col='candidate'):
+                 race_col='race', candidate_col='candidate',
+                 cache_dir: str = None,
+                 force_rebuild: bool = False):
         if df is None and filepath is None:
             raise ValueError('Either filepath or df must be provided')
 
+        # Try to load from cache first
+        if cache_dir and filepath and not force_rebuild:
+            import os
+            import pickle
+            import hashlib
+            
+            os.makedirs(cache_dir, exist_ok=True)
+            
+            # Create cache key from filepath and parameters
+            cache_key = hashlib.md5(
+                f"{filepath}_{key_cols}_{race_col}_{candidate_col}".encode()
+            ).hexdigest()
+            cache_path = os.path.join(cache_dir, f"processor_{cache_key}.pkl")
+            
+            if os.path.exists(cache_path):
+                print(f"Loading cached processor from: {cache_path}")
+                try:
+                    with open(cache_path, 'rb') as f:
+                        cached_state = pickle.load(f)
+                    self.load_state_dict(cached_state)
+                    print(f"✓ Loaded cached processor ({len(self.data_tensor)} ballots, {self.nitems} races)")
+                    return
+                except Exception as e:
+                    print(f"Warning: Failed to load cache ({e}), rebuilding...")
+
+        # Build processor from scratch
+        print(f"Building VoteDataProcessor from: {filepath or 'DataFrame'}")
+        import time
+        t0 = time.time()
+        
         if df is None:
             if filepath.endswith('.parquet'):
                 df = pd.read_parquet(filepath)
             else:
                 df = pd.read_csv(filepath)
+        print(f"  - Loaded raw data: {len(df)} rows in {time.time()-t0:.1f}s")
 
+        t1 = time.time()
         self._raw = df.copy()
         self.key_cols = list(key_cols)
         self.race_col = race_col
@@ -405,8 +444,10 @@ class VoteDataProcessor:
         self.race_to_idx = {r: i for i, r in enumerate(races)}
         self.idx_to_race = races
         self.nitems = len(races)
+        print(f"  - Found {self.nitems} races in {time.time()-t1:.1f}s")
 
         # build per-race candidate mappings
+        t1 = time.time()
         self.candidate_maps = {}
         self.n_classes_per_item = []
         for r in races:
@@ -414,26 +455,34 @@ class VoteDataProcessor:
             cmap = {c: i for i, c in enumerate(vals)}
             self.candidate_maps[r] = cmap
             self.n_classes_per_item.append(len(vals))
+        print(f"  - Built candidate mappings in {time.time()-t1:.1f}s")
 
         # map candidate -> class index per row
+        t1 = time.time()
         def map_row(row):
             r = row[self.race_col]
             c = row[self.candidate_col]
             return self.candidate_maps[r].get(c, 0)
 
         self._raw['_class_idx'] = self._raw.apply(map_row, axis=1)
+        print(f"  - Mapped candidates to class indices in {time.time()-t1:.1f}s")
 
         # Check for duplicate entries before pivoting
+        t1 = time.time()
         index_cols = self.key_cols + [self.race_col]
         duplicates = self._raw[self._raw.duplicated(subset=index_cols, keep=False)]
         if not duplicates.empty:
             unique_dup_keys = duplicates[index_cols].drop_duplicates().sort_values(by=index_cols)
-            print(f"\nUnique duplicate keys:\n")
+            print(f"\n⚠️  WARNING: Found {len(duplicates)} duplicate entries!")
+            print(f"Unique duplicate keys:\n")
             print(unique_dup_keys.head(50).to_string(index=False))
             duplicates.to_csv('duplicate_entries.csv', index=False)
+            print(f"Full duplicates saved to: duplicate_entries.csv\n")
 
         # pivot into wide format: index is the ballot key, columns are races
+        t1 = time.time()
         pivot = self._raw.set_index(self.key_cols + [self.race_col])['_class_idx'].unstack(level=self.race_col)
+        print(f"  - Pivoted data in {time.time()-t1:.1f}s")
 
         # ensure columns are in the same race order
         pivot = pivot.reindex(columns=self.idx_to_race)
@@ -445,11 +494,35 @@ class VoteDataProcessor:
         pivot_filled = pivot.fillna(0).astype(int)
 
         # store as tensors
+        t1 = time.time()
         self.data_tensor = torch.from_numpy(pivot_filled.values).long()
         self.mask_tensor = torch.from_numpy(mask.values).float()
+        print(f"  - Converted to tensors in {time.time()-t1:.1f}s")
 
         # keep the index (ballot ids)
         self.index = pivot_filled.index
+
+        print(f"✓ Processor built: {len(self.data_tensor)} ballots, {self.nitems} races (total: {time.time()-t0:.1f}s)")
+
+        # Save to cache if requested
+        if cache_dir and filepath:
+            import os
+            import pickle
+            import hashlib
+            
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_key = hashlib.md5(
+                f"{filepath}_{key_cols}_{race_col}_{candidate_col}".encode()
+            ).hexdigest()
+            cache_path = os.path.join(cache_dir, f"processor_{cache_key}.pkl")
+            
+            try:
+                t1 = time.time()
+                with open(cache_path, 'wb') as f:
+                    pickle.dump(self.state_dict(), f, protocol=pickle.HIGHEST_PROTOCOL)
+                print(f"✓ Saved cache to: {cache_path} ({time.time()-t1:.1f}s)")
+            except Exception as e:
+                print(f"Warning: Failed to save cache: {e}")
 
     def get_tensors(self):
         """Return (data_tensor, mask_tensor)

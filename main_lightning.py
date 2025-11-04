@@ -37,8 +37,8 @@ def main():
     if not DATA_PATH:
         raise RuntimeError('Set DATA_PATH (or pass --data) to your ballots file before running training')
 
-    # 1) read ballots and build dataset
-    p = VoteDataProcessor(filepath=DATA_PATH)
+    # 1) read ballots and build dataset (with caching)
+    p = VoteDataProcessor(filepath=DATA_PATH, cache_dir="data_cache")
     Ks = p.get_n_classes_per_item()
 
     # 2) DataLoader
@@ -49,7 +49,7 @@ def main():
         batch_size=args.batch_size, 
         shuffle=True,
         drop_last=False,
-        num_workers=2,
+        num_workers=1,
         persistent_workers=True
     )
 
@@ -73,6 +73,7 @@ def main():
 
     checkpoint_callback = ModelCheckpoint(
         monitor="train_loss",
+        save_last=True,
         save_on_train_epoch_end=True
     )
 
@@ -89,7 +90,8 @@ def main():
             max_epochs=args.epochs, 
             accelerator='auto', 
             devices='auto', 
-            callbacks=[checkpoint_callback, stopping_callback]
+            callbacks=[checkpoint_callback, stopping_callback],
+            plugins=[SLURMEnvironment(auto_requeue=False)]
         )
         
         print("---------- Fitting ----------")
