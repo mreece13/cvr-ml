@@ -4,20 +4,76 @@ gc()
 library(tidyverse)
 library(arrow)
 library(data.table)
+devtools::load_all("~/Documents/github/rcvr/")
 
-get_gsheet <- function(url, sheet, ...) {
-  googlesheets4::read_sheet(
-    ss = url,
-    sheet = sheet,
-    ...
+co_origmeta = googlesheets4::read_sheet(
+  "https://docs.google.com/spreadsheets/d/12_OxXiSCrg6kO-R2bOXCzDxqvXmZr20-BhFsN52yetM/edit?gid=505279773#gid=505279773",
+  "contests",
+  col_types = "c"
+) |> 
+  filter(state == "COLORADO") |> 
+  select(-order) |> 
+  mutate(county_name = replace_na(county_name, "")) |>
+  drop_na(contest) |>
+  mutate(across(-contest, str_to_upper)) |>
+  mutate(
+    district = ifelse(office %in% c("STATE HOUSE", "STATE SENATE", "US HOUSE"),
+      str_pad(district, width = 3, side = "left", pad = "0"),
+      district
+    ),
+    district = str_replace(district, fixed("COUNTY_NAME"), county_name),
+    district = str_replace(district, fixed("STATEWIDE"), state),
+    contest = iconv(contest, from = "ascii", to = "UTF-8", sub = "")
+  ) |> 
+  mutate(across(-c(state, county_name), str_to_lower)) |> 
+  mutate(
+    contest = str_remove(contest, candidate) |> str_squish()
   )
-}
 
-metadata = get_gsheet(
+co_files = googlesheets4::read_sheet(
+  "https://docs.google.com/spreadsheets/d/12_OxXiSCrg6kO-R2bOXCzDxqvXmZr20-BhFsN52yetM/edit?gid=505279773#gid=505279773",
+  "paths"
+) |> 
+  filter(state == "COLORADO", is.na(build)) |> 
+  mutate(path = paste0("../cvrs/", path)) |> 
+  select(path, state, county_name)
+
+co_meta = co_files |> 
+  mutate(
+    m = map(path, \(p) rcvr::clean_cvr(p, generate_metadata = TRUE, metadata_only = TRUE))
+  ) |> 
+  select(-path) |> 
+  unnest(cols = m) |> 
+  select(state, county_name, raw_contest = contest, raw_candidate, raw_party, party, magnitude) |> 
+  mutate(
+    contest = janitor::make_clean_names(raw_contest, case = "title", allow_dupes = TRUE) |> str_to_lower(),
+    candidate = str_to_lower(raw_candidate) |> str_remove_all(fixed('\"')) |> str_remove_all(fixed(".")) |> str_squish()
+  ) |> 
+  left_join(
+    co_origmeta,
+    join_by(state, county_name, contest, candidate)
+  ) |>
+  left_join(
+    select(co_origmeta, state, county_name, contest, office, district, magnitude),
+    join_by(state, county_name, contest)
+  ) |> 
+  mutate(
+    party = coalesce(party_detailed, party, raw_party),
+    magnitude = coalesce(magnitude.y, as.character(magnitude.x), magnitude),
+    office = coalesce(office.x, office.y),
+    district = coalesce(district.x, district.y)
+  ) |> 
+  select(
+    state, county_name, raw_contest, raw_candidate, raw_party, office, district, candidate, party, magnitude
+  ) |> 
+  distinct()
+
+co_meta_clean = googlesheets4::read_sheet(
   "https://docs.google.com/spreadsheets/d/1Pq9sNcCfLVi-qeXfBy7xEi5lPxpMJYy3LVUHQn_uEFI/edit?gid=1550619837#gid=1550619837",
   "metadata",
   col_types = "c"
 ) |>
+  filter(election == "2020 General", state == "COLORADO") |> 
   mutate(
     across(office:prop_text, str_to_lower),
     district = str_replace(district, "county_name", str_to_lower(county)),
@@ -26,22 +82,59 @@ metadata = get_gsheet(
   ) |>
   group_by(raw_candidate) |>
   fill(party) |>
-  ungroup() |>
-  group_by(candidate, party) |>
-  fill(office, district, .direction = "updown") |>
   ungroup() |> 
-  filter()
+  select(-type:-prop_text, -election) |> 
+  distinct(state, county, contest, raw_candidate, office, district, candidate, party, magnitude)
 
-rcvr::clean_cvr(
-  path = "~/Dropbox (MIT)/Research/cvrs/data/raw/Colorado/Garfield/cvr.csv",
-  metadata = filter(metadata, state == "Colorado"),
-  write_path = "~/Dropbox (MIT)/Research/cvrs/data/pass2/state=COLORADO/county_name=GARFIELD/part-0.parquet"
+clean = co_files |> 
+  left_join(
+    co_meta_clean, 
+    join_by(state, county_name == county)
+  ) |> 
+  mutate(
+    w = glue::glue("../cvrs/data/pass3/state={state}/county_name={county_name}/part-0.parquet")
+  ) |> 
+  nest(meta = -c(path, w))
+
+pwalk(list(clean$path, clean$w, clean$meta),
+  \(p, w, m) rcvr::clean_cvr(p, metadata = m, write_path = w)
 )
 
-open_dataset("~/Dropbox (MIT)/Research/cvrs/data/pass2") |> 
+######
+# create test file for VAE implementation
+######
+
+small_cands = open_dataset("~/Dropbox (MIT)/Research/cvrs/data/pass3") |>
   filter(
     state == "COLORADO",
-    magnitude == "1",
+    magnitude == 1,
+    !(office %in% c("SUPREME COURT", "COURT OF APPEALS", "COUNTY JUDGE", "DISTRICT COURT")),
+    candidate != "WRITEIN"
+  ) |> 
+  mutate(
+    race = paste(office, district, sep = "_")
+  ) |> 
+  count(race, candidate) |> 
+  filter(n <= 50)
+
+uncontested = open_dataset("~/Dropbox (MIT)/Research/cvrs/data/pass3") |>
+  filter(
+    state == "COLORADO",
+    magnitude == 1,
+    !(office %in% c("SUPREME COURT", "COURT OF APPEALS", "COUNTY JUDGE", "DISTRICT COURT")),
+    candidate != "WRITEIN"
+  ) |> 
+  mutate(
+    race = paste(office, district, sep = "_")
+  ) |> 
+  distinct(race, candidate) |> 
+  collect() |> 
+  filter(n() == 1, .by = race)
+
+open_dataset("~/Dropbox (MIT)/Research/cvrs/data/pass3") |>
+  filter(
+    state == "COLORADO",
+    (magnitude == 1 | is.na(magnitude)),
     !(office %in% c("SUPREME COURT", "COURT OF APPEALS", "COUNTY JUDGE", "DISTRICT COURT")),
     candidate != "WRITEIN"
   ) |> 
@@ -49,12 +142,9 @@ open_dataset("~/Dropbox (MIT)/Research/cvrs/data/pass2") |>
     race = paste(office, district, sep = "_")
   ) |> 
   select(state, county_name, cvr_id, race, candidate, magnitude) |> 
-  # collect() |> 
-  # filter(magnitude == "1") |> 
-  # select(-magnitude) |> 
-  write_parquet("~/Dropbox (MIT)/Research/cvr-ml/data/colorado.parquet")
-
-d = read_parquet("~/Dropbox (MIT)/Research/cvr-ml/data/colorado.parquet")
+  anti_join(small_cands, join_by(race, candidate)) |> 
+  anti_join(uncontested, join_by(race, candidate)) |> 
+  write_parquet("~/Dropbox (MIT)/Research/cvr-ml/data/colorado2.parquet")
 
 d |> 
   semi_join(
@@ -62,10 +152,6 @@ d |>
     join_by(county_name, cvr_id)
   ) |> 
   write_parquet("~/Dropbox (MIT)/Research/cvr-ml/data/colorado_sample.parquet")
-
-d |> 
-  filter(n()>1, .by = c(state, county_name, cvr_id, race)) |> 
-  distinct(county_name, race)
 
 cands = open_dataset("../cvrs/data/pass2") |> 
   filter(state == "COLORADO") |> 
@@ -79,7 +165,6 @@ cands = open_dataset("../cvrs/data/pass2") |>
   fill(party_detailed, .direction = "downup") |> 
   ungroup() |> 
   distinct()
-
 
 raw = read_parquet("data/colorado.parquet") |> 
   left_join(cands, join_by(race, candidate), relationship = "many-to-many")
