@@ -20,10 +20,10 @@ from scipy.cluster.hierarchy import dendrogram, linkage
 import warnings
 warnings.filterwarnings('ignore')
 
-from model import CVAE, VoteDataProcessor
+from model import CVAE, VAEDataModule
 
 
-def extract_candidate_embeddings(model, processor):
+def extract_candidate_embeddings(model, datamodule):
     """
     Extract all candidate embeddings from the trained encoder.
     
@@ -34,9 +34,9 @@ def extract_candidate_embeddings(model, processor):
     rows = []
     encoder = model.encoder
     
-    for race_idx in range(processor.nitems):
-        race_name = processor.idx_to_race[race_idx]
-        candidates = processor.get_all_candidates_for_race(race_idx)
+    for race_idx in range(datamodule.nitems):
+        race_name = datamodule.idx_to_race[race_idx]
+        candidates = datamodule.get_all_candidates_for_race(race_idx)
         
         # Get embedding matrix for this race: shape [Ki, emb_dim]
         emb_matrix = encoder.embeddings[race_idx].weight.data.cpu().numpy()
@@ -293,16 +293,16 @@ def plot_dendrogram(embeddings_df, race_name, output_dir):
     plt.close()
 
 
-def analyze_decoder_weights(model, processor, output_dir):
+def analyze_decoder_weights(model, datamodule, output_dir):
     """
     Analyze decoder weight vectors to see how latent dimensions map to candidates.
     """
     decoder = model.decoder
     
     results = []
-    for race_idx in range(processor.nitems):
-        race_name = processor.idx_to_race[race_idx]
-        candidates = processor.get_all_candidates_for_race(race_idx)
+    for race_idx in range(datamodule.nitems):
+        race_name = datamodule.idx_to_race[race_idx]
+        candidates = datamodule.get_all_candidates_for_race(race_idx)
         
         # Decoder weights for this race: [latent_dims, Ki]
         weights = decoder.weights_list[race_idx].data.cpu().numpy()
@@ -331,7 +331,9 @@ def main():
     parser = argparse.ArgumentParser(description='Analyze candidate embeddings from trained CVAE')
     parser.add_argument('--checkpoint', type=str, required=True, help='Path to model checkpoint')
     parser.add_argument('--data', type=str, default=None,
-                       help='Path to data file (only needed if checkpoint lacks data processor)')
+                       help='Path to data file (required to load datamodule)')
+    parser.add_argument('--batch-size', type=int, default=512,
+                       help='Batch size for datamodule (only used if creating new datamodule)')
     parser.add_argument('--output-dir', type=str, default='embedding_analysis', 
                        help='Directory to save analysis outputs')
     parser.add_argument('--race', type=str, default=None, 
@@ -346,40 +348,39 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True, parents=True)
     
-    # Load model and processor
+    # Load model checkpoint
     print(f"Loading checkpoint: {args.checkpoint}")
     checkpoint = torch.load(args.checkpoint, map_location='cpu', weights_only=False)
     
-    # Load processor from checkpoint if available, otherwise from data file
-    if 'data_processor' in checkpoint:
-        processor = VoteDataProcessor.from_state_dict(checkpoint['data_processor'])
-        print("Loaded data processor from checkpoint")
-    elif args.data:
-        print(f"Loading data processor from file: {args.data}")
-        processor = VoteDataProcessor(filepath=args.data)
-    else:
-        raise ValueError("Checkpoint doesn't contain data processor state. "
-                        "Please provide --data argument with path to data file.")
+    # Create datamodule - we need the data file to rebuild it
+    if not args.data:
+        raise ValueError("Please provide --data argument with path to data file.")
+    
+    print(f"Creating datamodule from file: {args.data}")
+    datamodule = VAEDataModule(filepath=args.data, batch_size=args.batch_size)
+    datamodule.prepare_data()
+    datamodule.setup()
+    print(f"Datamodule loaded with {datamodule.nitems} races")
     
     # Load model
     model = CVAE.load_from_checkpoint(
         args.checkpoint, 
         map_location='cpu',
         dataloader=None, 
-        nitems=processor.nitems,
-        n_classes_per_item=processor.get_n_classes_per_item(), 
+        nitems=datamodule.nitems,
+        n_classes_per_item=datamodule.n_classes_per_item, 
         latent_dims=2, 
         hidden_layer_size=64, 
         qm=None, 
         learning_rate=1e-3, 
-        batch_size=512
+        batch_size=args.batch_size
     )
     model.eval()
     print("Model loaded successfully")
     
     # Extract embeddings
     print("\nExtracting candidate embeddings...")
-    embeddings_df = extract_candidate_embeddings(model, processor)
+    embeddings_df = extract_candidate_embeddings(model, datamodule)
     
     # Save embeddings
     embeddings_path = output_dir / "candidate_embeddings.csv"
@@ -388,7 +389,7 @@ def main():
     
     # Analyze decoder weights
     print("\nAnalyzing decoder weights...")
-    decoder_df = analyze_decoder_weights(model, processor, output_dir)
+    decoder_df = analyze_decoder_weights(model, datamodule, output_dir)
     
     # Visualizations
     print("\nGenerating visualizations...")

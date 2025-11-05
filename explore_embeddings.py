@@ -6,32 +6,33 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
-from model import CVAE, VoteDataProcessor
+from model import CVAE, VAEDataModule
 
 # ============================================================================
 # CONFIGURATION - Update these paths
 # ============================================================================
-CHECKPOINT_PATH = '/Users/mason/Dropbox (MIT)/Research/cvr-ml/lightning_logs/version_0/checkpoints/epoch=0-step=3209.ckpt'
+CHECKPOINT_PATH = '/Users/mason/Dropbox (MIT)/Research/cvr-ml/lightning_logs/version_0/checkpoints/last.ckpt'
+DATA_PATH = 'data/colorado2.parquet'  # Path to your data file
 OUTPUT_DIR = "embedding_analysis"
 
 # ============================================================================
-# Load Model and Processor
+# Load Model and DataModule
 # ============================================================================
 print("Loading checkpoint...")
 checkpoint = torch.load(CHECKPOINT_PATH, map_location='cpu', weights_only=False)
 
-if 'data_processor' in checkpoint:
-    processor = VoteDataProcessor.from_state_dict(checkpoint['data_processor'])
-    print("✓ Loaded data processor from checkpoint")
-else:
-    raise ValueError("Checkpoint missing data processor. Use a newer checkpoint.")
+print(f"Creating datamodule from file: {DATA_PATH}")
+datamodule = VAEDataModule(filepath=DATA_PATH, batch_size=512)
+datamodule.prepare_data()
+datamodule.setup()
+print(f"✓ Datamodule loaded with {datamodule.nitems} races")
 
 model = CVAE.load_from_checkpoint(
     CHECKPOINT_PATH, 
     map_location='cpu',
     dataloader=None, 
-    nitems=processor.nitems,
-    n_classes_per_item=processor.get_n_classes_per_item(), 
+    nitems=datamodule.nitems,
+    n_classes_per_item=datamodule.n_classes_per_item, 
     latent_dims=2, 
     hidden_layer_size=64, 
     qm=None, 
@@ -44,12 +45,12 @@ print("✓ Model loaded")
 # ============================================================================
 # Extract All Embeddings
 # ============================================================================
-def get_embeddings_df(model, processor):
+def get_embeddings_df(model, datamodule):
     """Extract all candidate embeddings into a DataFrame"""
     rows = []
-    for race_idx in range(processor.nitems):
-        race_name = processor.idx_to_race[race_idx]
-        candidates = processor.get_all_candidates_for_race(race_idx)
+    for race_idx in range(datamodule.nitems):
+        race_name = datamodule.idx_to_race[race_idx]
+        candidates = datamodule.get_all_candidates_for_race(race_idx)
         
         # Get projected embeddings
         emb_matrix = model.encoder.embeddings[race_idx].weight.data
@@ -70,8 +71,8 @@ def get_embeddings_df(model, processor):
     
     return pd.DataFrame(rows)
 
-embeddings_df = get_embeddings_df(model, processor)
-print(f"✓ Extracted embeddings for {len(embeddings_df)} candidates across {processor.nitems} races")
+embeddings_df = get_embeddings_df(model, datamodule)
+print(f"✓ Extracted embeddings for {len(embeddings_df)} candidates across {datamodule.nitems} races")
 
 # ============================================================================
 # Quick Summary
@@ -79,7 +80,7 @@ print(f"✓ Extracted embeddings for {len(embeddings_df)} candidates across {pro
 print("\n" + "="*80)
 print("DATASET SUMMARY")
 print("="*80)
-print(f"Total races: {processor.nitems}")
+print(f"Total races: {datamodule.nitems}")
 print(f"Total candidates: {len(embeddings_df)}")
 print(f"Embedding dimension: {embeddings_df.iloc[0]['embedding'].shape[0]}")
 print("\nTop 10 races by candidate count:")
@@ -120,9 +121,9 @@ def find_similar(candidate_name, race_name=None, top_k=5):
 
 # Example usage:
 print("\n" + "="*80)
-print("EXAMPLE: Find candidates similar to 'JOSEPH R BIDEN'")
+print("EXAMPLE: Find candidates similar to 'joseph r biden'")
 print("="*80)
-similar = find_similar("JOSEPH R BIDEN", top_k=10)
+similar = find_similar("joseph r biden", top_k=10)
 if similar is not None:
     print(similar.to_string(index=False))
 
@@ -183,10 +184,10 @@ def visualize_race(race_name, method='pca'):
 
 # Example: Visualize presidential race
 print("\n" + "="*80)
-print("EXAMPLE: Visualize 'US PRESIDENT_FEDERAL' race")
+print("EXAMPLE: Visualize 'us president_federal' race")
 print("="*80)
 try:
-    visualize_race("US PRESIDENT_FEDERAL", method='pca')
+    visualize_race("us president_federal", method='pca')
 except Exception as e:
     print(f"Could not visualize: {e}")
 
@@ -215,20 +216,20 @@ def cluster_race(race_name, n_clusters=3):
 
 # Example usage:
 print("\n" + "="*80)
-print("EXAMPLE: Cluster 'US PRESIDENT_FEDERAL' candidates")
+print("EXAMPLE: Cluster 'us president_federal' candidates")
 print("="*80)
 try:
-    clustered = cluster_race("US PRESIDENT_FEDERAL", n_clusters=4)
+    clustered = cluster_race("us president_federal", n_clusters=4)
 except Exception as e:
     print(f"Could not cluster: {e}")
 
 # ============================================================================
 # Example 4: Analyze Decoder Weights
 # ============================================================================
-def get_decoder_weights(model, processor, race_name):
+def get_decoder_weights(model, datamodule, race_name):
     """Get decoder weight matrix for a race"""
-    race_idx = processor.race_to_idx[race_name]
-    candidates = processor.get_all_candidates_for_race(race_idx)
+    race_idx = datamodule.race_to_idx[race_name]
+    candidates = datamodule.get_all_candidates_for_race(race_idx)
     
     # Weights shape: [latent_dims, n_candidates]
     weights = model.decoder.weights_list[race_idx].data.cpu().numpy()
@@ -243,10 +244,10 @@ def get_decoder_weights(model, processor, race_name):
     return pd.DataFrame(df_rows)
 
 print("\n" + "="*80)
-print("EXAMPLE: Decoder weights for 'US PRESIDENT_FEDERAL'")
+print("EXAMPLE: Decoder weights for 'us president_federal'")
 print("="*80)
 try:
-    decoder_df = get_decoder_weights(model, processor, "US PRESIDENT_FEDERAL")
+    decoder_df = get_decoder_weights(model, datamodule, "us president_federal")
     print(decoder_df.to_string(index=False))
     print("\nInterpretation:")
     print("  • Each dim_X column shows how latent dimension X affects this candidate")
@@ -265,11 +266,12 @@ print("\nAvailable functions:")
 print("  • find_similar(candidate_name, race_name=None, top_k=5)")
 print("  • visualize_race(race_name, method='pca')")
 print("  • cluster_race(race_name, n_clusters=3)")
-print("  • get_decoder_weights(model, processor, race_name)")
+print("  • get_decoder_weights(model, datamodule, race_name)")
 print("\nAvailable data:")
 print("  • embeddings_df: DataFrame with all candidate embeddings")
 print("  • model: The trained CVAE model")
-print("  • processor: The VoteDataProcessor")
+print("  • datamodule: The VAEDataModule")
 print("\nExample races to explore:")
 for race in embeddings_df['race_name'].value_counts().head(5).index:
     print(f"  • {race}")
+
