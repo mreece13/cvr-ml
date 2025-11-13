@@ -34,28 +34,13 @@ def main():
 
     DATA_PATH = args.data
 
-    # 1) read ballots and build dataset (with caching)
+    # 1) read ballots and build dataset
     dm = VAEDataModule(filepath=DATA_PATH, batch_size=args.batch_size)
     dm.prepare_data()
     dm.setup()
-    # p = VoteDataProcessor(filepath=DATA_PATH)
-
-    # 2) DataLoader
-    # ds = p.get_torch_dataset()
-    print("---------- Loading DataLoader ----------")
-    # dl = DataLoader(
-    #     ds,
-    #     batch_size=args.batch_size, 
-    #     shuffle=True,
-    #     drop_last=False,
-    #     num_workers=1,
-    #     persistent_workers=True
-    # )
 
     # 3) instantiate CVAE
-    print("---------- Loading CVAE ----------")
     model = CVAE(
-        # dataloader=dl,
         nitems=dm.nitems,
         latent_dims=args.latent_dims,
         hidden_layer_size=args.hidden_size,
@@ -66,9 +51,6 @@ def main():
         encoder_emb_dim=args.emb_dim,
         n_samples=args.n_samples,
     )
-    
-    # Attach data processor for checkpointing
-    # model.set_data_processor(p)
 
     checkpoint_callback = ModelCheckpoint(
         monitor="train_loss",
@@ -79,8 +61,8 @@ def main():
     stopping_callback = EarlyStopping(monitor="train_loss", mode="min")
 
     # better numerial stability for matmul, and supported only on Engaging
-    # if torch.cuda.is_available():
-        # torch.set_float32_matmul_precision('high')
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('high')
 
     print("---------- Building Trainer ----------")
     if not args.eval_only:

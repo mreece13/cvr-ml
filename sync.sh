@@ -1,1 +1,1 @@
-rsync -rv --progress mpreece@orcd-login003.mit.edu:{/orcd/home/002/mpreece/cvr-ml/outputs,/orcd/home/002/mpreece/cvr-ml/lightning_logs} ~/Dropbox\ \(MIT\)/Research/cvr-ml/
+rsync -rvh --progress mpreece@orcd-login003.mit.edu:{/orcd/home/002/mpreece/cvr-ml/outputs,/orcd/home/002/mpreece/cvr-ml/lightning_logs} ~/Dropbox\ \(MIT\)/Research/cvr-ml/
