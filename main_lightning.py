@@ -66,18 +66,21 @@ def main():
 
     print("---------- Building Trainer ----------")
     if not args.eval_only:
+        os.makedirs('checkpoints/' + file_name + "/", exist_ok=True)
+
         trainer = L.Trainer(
             max_epochs=args.epochs, 
             accelerator='auto', 
-            devices='auto', 
+            devices='auto',
+            default_root_dir='checkpoints/' + file_name + "/",
             callbacks=[checkpoint_callback, stopping_callback],
             plugins=[SLURMEnvironment(auto_requeue=False)]
         )
         
         print("---------- Fitting ----------")
         # save a checkpoint with a custom name using `file_name`
-        trainer.fit(model, ckpt_path = "checkpoints/" + file_name + "_last.ckpt", datamodule = dm)
-        # trainer.fit(model, ckpt_path = "last", datamodule = dm)
+        # trainer.fit(model, ckpt_path = "checkpoints/" + file_name + "_last.ckpt", datamodule = dm)
+        trainer.fit(model, ckpt_path = "last", datamodule = dm)
     
     # Build deterministic eval dataloader from the DataModule
     eval_dl = dm.test_dataloader()
