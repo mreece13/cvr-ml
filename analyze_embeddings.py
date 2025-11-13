@@ -362,18 +362,23 @@ def main():
     datamodule.setup()
     print(f"Datamodule loaded with {datamodule.nitems} races")
     
-    # Load model
+    # Inspect hparams for info and load model letting hparams come from ckpt
+    hparams = checkpoint.get('hyper_parameters', {}) if isinstance(checkpoint, dict) else {}
+    if hparams:
+        print("Hyperparameters from checkpoint:")
+        for k in [
+            'latent_dims', 'hidden_layer_size', 'encoder_emb_dim', 'n_samples', 'beta', 'learning_rate', 'batch_size', 'nitems'
+        ]:
+            if k in hparams:
+                print(f"  - {k}: {hparams[k]}")
+        if 'nitems' in hparams and hparams['nitems'] != datamodule.nitems:
+            print(f"WARNING: ckpt nitems={hparams['nitems']} differs from current data nitems={datamodule.nitems}")
+
     model = CVAE.load_from_checkpoint(
         args.checkpoint, 
         map_location='cpu',
-        dataloader=None, 
         nitems=datamodule.nitems,
-        n_classes_per_item=datamodule.n_classes_per_item, 
-        latent_dims=2, 
-        hidden_layer_size=64, 
-        qm=None, 
-        learning_rate=1e-3, 
-        batch_size=args.batch_size
+        n_classes_per_item=datamodule.n_classes_per_item
     )
     model.eval()
     print("Model loaded successfully")

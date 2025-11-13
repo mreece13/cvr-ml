@@ -456,6 +456,12 @@ class VAEDataModule(L.LightningDataModule):
     def train_dataloader(self):
         return torch.utils.data.DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True, drop_last=False, num_workers=8)
     
+    def test_dataloader(self):
+        """
+        Deterministic DataLoader (no shuffling) for evaluation/exports.
+        """
+        return torch.utils.data.DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False, drop_last=False, num_workers=0)
+    
     ### Additional utility methods ###
     def get_candidate_name(self, race_idx: int, class_idx: int) -> str:
         """

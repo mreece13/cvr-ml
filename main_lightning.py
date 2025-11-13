@@ -23,8 +23,8 @@ def main():
     parser.add_argument('--eval-only', type=bool, default=False)
     args = parser.parse_args()
 
-    # Build a file name using all arguments except eval-only
-    args_dict = {k: v for k, v in vars(args).items() if k != 'eval_only' and k != 'data'}
+    # Build a file name using only `batch-size`, `latent-dims`, `hidden-size`, `emb-dim`
+    args_dict = {k: v for k, v in vars(args).items() if k in ['batch_size', 'latent_dims', 'hidden_size', 'emb_dim']}
     file_name_parts = []
     for k, v in args_dict.items():
         file_name_parts.append(f"{k}{v}")
@@ -75,13 +75,16 @@ def main():
         )
         
         print("---------- Fitting ----------")
-        trainer.fit(model, ckpt_path = "last", datamodule = dm)
+        # save a checkpoint with a custom name using `file_name`
+        trainer.fit(model, ckpt_path = "checkpoints/" + file_name + "_last.ckpt", datamodule = dm)
+        # trainer.fit(model, ckpt_path = "last", datamodule = dm)
     
-    # eval_dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False, drop_last=False)
-    # evaluate_and_export(model, p, eval_dl, file_name)
+    # Build deterministic eval dataloader from the DataModule
+    eval_dl = dm.test_dataloader()
+    evaluate_and_export(model, dm, eval_dl, file_name)
 
 def evaluate_and_export(model: torch.nn.Module,
-                        processor: None, # VoteDataProcessor
+                        dm: VAEDataModule,
                         dl: DataLoader,
                         file_name: str,
                         out_dir: str = "outputs",
@@ -101,8 +104,11 @@ def evaluate_and_export(model: torch.nn.Module,
     model.to(device)
     model.eval()
 
-    # save index
-    processor.index.to_frame(index=False).to_csv(os.path.join(out_dir, file_name + "_index.csv"), index=False)
+    # save index (convert polars -> pandas)
+    try:
+        dm.index.to_pandas().to_csv(os.path.join(out_dir, file_name + "_index.csv"), index=False)
+    except Exception:
+        pass
 
     # 1) collect posterior means (mu) for every row in the dataset (no sampling)
     mu_list = []
@@ -118,23 +124,28 @@ def evaluate_and_export(model: torch.nn.Module,
     mu_all = torch.cat(mu_list, dim=0).numpy()
     latent_dim = mu_all.shape[1]
 
-    # save voter latents
-    z_cols = [f"z{d}" for d in range(latent_dim)]
-    df_latents = pd.DataFrame(mu_all, columns=z_cols)
-    df_latents = pd.concat([processor.index.to_frame(index=False), df_latents.reset_index(drop=True)], axis=1)
-    df_latents.to_csv(os.path.join(out_dir, file_name + "_voter_latents.csv"), index=False)
-    print(f"Saved voter latents -> {os.path.join(out_dir, file_name + '_voter_latents.csv')}")
+    # save voter latents (means only) with mu_* columns
+    mu_cols = [f"mu_{d}" for d in range(latent_dim)]
+    df_latents = pd.DataFrame(mu_all, columns=mu_cols)
+    try:
+        ids_df = dm.index.to_pandas()
+        df_latents = pd.concat([ids_df.reset_index(drop=True), df_latents.reset_index(drop=True)], axis=1)
+    except Exception:
+        pass
+    out_latents = os.path.join(out_dir, file_name + "_voter_latents.csv")
+    df_latents.to_csv(out_latents, index=False)
+    print(f"Saved voter latents -> {out_latents}")
 
     # --- extract per-item per-class decoder parameters (match Decoder in model.py) ---
-    Ks = processor.get_n_classes_per_item()
-    nitems = processor.nitems
+    Ks = dm.n_classes_per_item
+    nitems = dm.nitems
     latent_dim = mu_all.shape[1]
 
     # build readable candidate names per item from processor.candidate_maps if available
     candidate_names_per_item = []
-    item_names = getattr(processor, "idx_to_race", None)
+    item_names = getattr(dm, "idx_to_race", None)
     for r in (item_names if item_names is not None else list(range(nitems))):
-        cmap = processor.candidate_maps[r] if hasattr(processor, "candidate_maps") else {}
+        cmap = dm.candidate_maps[r] if hasattr(dm, "candidate_maps") else {}
         # invert cmap into ordered list by index
         if cmap:
             inv = [None] * len(cmap)
@@ -208,7 +219,7 @@ def evaluate_and_export(model: torch.nn.Module,
     pres_idx = None
     if item_names is not None:
         for i, nm in enumerate(item_names):
-            if nm and 'PRESIDENT' in nm.upper():
+            if nm and 'PRESIDENT_FEDERAL' in nm.upper():
                 pres_idx = i
                 break
 
@@ -267,12 +278,11 @@ def evaluate_and_export(model: torch.nn.Module,
         per_dim = mu_all.copy()  # each column is an 'ideal point' on that dimension
 
         # assemble voter dataframe with ids (if available)
-        df_voters = pd.DataFrame(per_dim, columns=[f'z{d}' for d in range(per_dim.shape[1])])
-        # attach ids if they exist in the earlier saved df_latents
+        df_voters = pd.DataFrame(per_dim, columns=[f"mu_{d}" for d in range(per_dim.shape[1])])
+        # attach ids
         try:
-            ids_cols = [c for c in df_latents.columns if c not in df_voters.columns]
-            if ids_cols:
-                df_voters = pd.concat([df_latents[ids_cols].reset_index(drop=True), df_voters.reset_index(drop=True)], axis=1)
+            ids_df = dm.index.to_pandas()
+            df_voters = pd.concat([ids_df.reset_index(drop=True), df_voters.reset_index(drop=True)], axis=1)
         except Exception:
             pass
 
