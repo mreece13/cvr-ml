@@ -13,7 +13,7 @@ from lightning.pytorch.loggers import CSVLogger
 
 def main():
     parser = argparse.ArgumentParser(description='Train CVAE on ballot data')
-    parser.add_argument('--data', type=str, default='data/colorado2.parquet')
+    parser.add_argument('--data', type=str, default='data/all_sample.parquet')
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--latent-dims', type=int, default=2)
     parser.add_argument('--hidden-size', type=int, default=64)
