@@ -9,6 +9,7 @@ import pandas as pd
 from lightning.pytorch.plugins.environments import SLURMEnvironment
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
+from lightning.pytorch.loggers import CSVLogger
 
 def main():
     parser = argparse.ArgumentParser(description='Train CVAE on ballot data')
@@ -24,7 +25,7 @@ def main():
     args = parser.parse_args()
 
     # Build a file name using only `batch-size`, `latent-dims`, `hidden-size`, `emb-dim`
-    args_dict = {k: v for k, v in vars(args).items() if k in ['batch_size', 'latent_dims', 'hidden_size', 'emb_dim']}
+    args_dict = {k: v for k, v in vars(args).items() if k in ['data', 'batch_size', 'latent_dims', 'hidden_size', 'emb_dim']}
     file_name_parts = []
     for k, v in args_dict.items():
         file_name_parts.append(f"{k}{v}")
@@ -66,13 +67,16 @@ def main():
 
     print("---------- Building Trainer ----------")
     if not args.eval_only:
-        os.makedirs('checkpoints/' + file_name + "/", exist_ok=True)
+        # os.makedirs('checkpoints/' + file_name + "/", exist_ok=True)
+
+        logger = CSVLogger(version = file_name)
 
         trainer = L.Trainer(
             max_epochs=args.epochs, 
             accelerator='auto', 
             devices='auto',
-            default_root_dir='checkpoints/' + file_name + "/",
+            logger = logger,
+            # default_root_dir='checkpoints/' + file_name + "/",
             callbacks=[checkpoint_callback, stopping_callback],
             plugins=[SLURMEnvironment(auto_requeue=False)]
         )
