@@ -36,7 +36,13 @@ def main():
     DATA_PATH = args.data
 
     # 1) read ballots and build dataset
-    dm = VAEDataModule(filepath=DATA_PATH, batch_size=args.batch_size)
+    dm = VAEDataModule(
+        filepath=DATA_PATH, 
+        batch_size=args.batch_size, 
+        streaming = True, 
+        memmap_dir='memmaps', 
+        mask_dtype = 'float16'
+    )
     dm.prepare_data()
     dm.setup()
 
