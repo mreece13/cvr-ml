@@ -4,6 +4,29 @@ import torch
 import polars as pl
 import lightning as L
 
+class SparseVotesDataset(torch.utils.data.Dataset):
+    """Dataset for sparse vote representation - stores only non-zero entries."""
+    def __init__(self, triplets, n_voters, n_items):
+        self.triplets = triplets
+        self.n_voters = n_voters
+        self.n_items = n_items
+        # build per-row slice indices for fast lookup
+        self.row_map = {}
+        for i, (row, item, val) in enumerate(self.triplets):
+            self.row_map.setdefault(row, []).append((item, val))
+    
+    def __len__(self):
+        return self.n_voters
+    
+    def __getitem__(self, idx):
+        items = self.row_map.get(idx, [])
+        x = torch.zeros(self.n_items, dtype=torch.long)
+        m = torch.zeros(self.n_items, dtype=torch.float32)
+        for item, val in items:
+            x[item] = val
+            m[item] = 1.0
+        return x, m
+
 class SamplingLayer(L.LightningModule):
     """
     class that samples from the approximate posterior using the reparametrisation trick
@@ -482,25 +505,6 @@ class VAEDataModule(L.LightningDataModule):
                 triplets.append((row_idx, ridx, r['_class_idx']))
             triplets_arr = np.array(triplets, dtype=np.int32)
             self.index = keys_df.select(self.key_cols)
-            class SparseVotesDataset(torch.utils.data.Dataset):
-                def __init__(self, triplets, n_voters, n_items):
-                    self.triplets = triplets
-                    self.n_voters = n_voters
-                    self.n_items = n_items
-                    # build per-row slice indices for fast lookup
-                    self.row_map = {}
-                    for i, (row, item, val) in enumerate(self.triplets):
-                        self.row_map.setdefault(row, []).append((item, val))
-                def __len__(self):
-                    return self.n_voters
-                def __getitem__(self, idx):
-                    items = self.row_map.get(idx, [])
-                    x = torch.zeros(self.n_items, dtype=torch.long)
-                    m = torch.zeros(self.n_items, dtype=torch.float32)
-                    for item, val in items:
-                        x[item] = val
-                        m[item] = 1.0
-                    return x, m
             self.dataset = SparseVotesDataset(triplets_arr, n_voters, self.nitems)
             # Set dummy tensors for compatibility
             self.data_tensor = None
