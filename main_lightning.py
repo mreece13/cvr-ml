@@ -75,7 +75,7 @@ def main():
     if not args.eval_only:
         # os.makedirs('checkpoints/' + file_name + "/", exist_ok=True)
 
-        logger = CSVLogger(version = file_name)
+        logger = CSVLogger(version = file_name, save_dir = "lightning_logs")
 
         trainer = L.Trainer(
             max_epochs=args.epochs, 
