@@ -39,9 +39,7 @@ def main():
     dm = VAEDataModule(
         filepath=DATA_PATH, 
         batch_size=args.batch_size, 
-        streaming = True, 
-        memmap_dir='memmaps', 
-        mask_dtype = 'float16'
+        representation = 'sparse'
     )
     dm.prepare_data()
     dm.setup()

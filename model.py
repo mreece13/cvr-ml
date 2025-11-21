@@ -335,10 +335,9 @@ class VAEDataModule(L.LightningDataModule):
                  key_cols=('state', 'county_name', 'cvr_id'),
                  race_col='race', candidate_col='candidate', batch_size: int = 128,
                  representation: str = 'dense',  # 'dense' (pivot) or 'sparse'
-                 streaming: bool = False,
                  memmap_dir: str = None,
-                 dtype: str = 'int32',
-                 mask_dtype: str = 'float32'):
+                 data_dtype: str = 'int16',
+                 mask_dtype: str = 'uint8'):
         super().__init__()
         self.batch_size = batch_size
         self.filepath = filepath
@@ -346,9 +345,8 @@ class VAEDataModule(L.LightningDataModule):
         self.race_col = race_col
         self.candidate_col = candidate_col
         self.representation = representation
-        self.streaming = streaming
         self.memmap_dir = memmap_dir
-        self.dtype = dtype
+        self.data_dtype = data_dtype
         self.mask_dtype = mask_dtype
 
     def prepare_data(self):
@@ -416,69 +414,58 @@ class VAEDataModule(L.LightningDataModule):
             print(f"Full duplicates saved to: duplicate_entries.csv\n")
 
         if self.representation == 'dense':
-            # Existing pivot path (may be large). Provide optional memmap + streaming alternative
-            if self.streaming and self.memmap_dir is not None:
+            # Standard pivot path - fast but requires 2x memory peak
+            df_collected = df_with_class.collect()
+            pivot = df_collected.pivot(
+                values='_class_idx',
+                index=self.key_cols,
+                columns=self.race_col,
+                aggregate_function='first'
+            )
+            race_cols = [col for col in pivot.columns if col not in self.key_cols]
+            ordered_race_cols = [r for r in self.idx_to_race if r in race_cols]
+            pivot = pivot.select(self.key_cols + ordered_race_cols)
+            race_data_cols = ordered_race_cols
+            
+            # Use smaller dtypes: uint8 for binary mask, configurable int for data
+            mask = pivot.select([
+                pl.col(col).is_not_null().cast(pl.UInt8).alias(col) 
+                for col in race_data_cols
+            ])
+            pivot_filled = pivot.select(
+                self.key_cols + [
+                    pl.col(col).fill_null(0).cast(pl.Int64).alias(col)
+                    for col in race_data_cols
+                ]
+            )
+            
+            # Option: write directly to memmap to avoid keeping 2 copies in RAM
+            if self.memmap_dir is not None:
                 import os, numpy as np
                 os.makedirs(self.memmap_dir, exist_ok=True)
-                # Collect unique voter keys only (smaller)
-                keys_df = df_with_class.select(self.key_cols).unique().sort(self.key_cols).collect()
-                n_voters = keys_df.height
-                race_index_map = {r: i for i, r in enumerate(self.idx_to_race)}
-                # Preallocate memmaps
+                n_voters, n_races = len(pivot_filled), len(race_data_cols)
                 data_path = os.path.join(self.memmap_dir, 'data.memmap')
                 mask_path = os.path.join(self.memmap_dir, 'mask.memmap')
-                data_mm = np.memmap(data_path, mode='w+', dtype=self.dtype, shape=(n_voters, self.nitems))
-                mask_mm = np.memmap(mask_path, mode='w+', dtype=self.mask_dtype, shape=(n_voters, self.nitems))
-                # Initialize with zeros
-                data_mm[:] = 0
-                mask_mm[:] = 0.0
-                # Build key -> row index map
-                key_to_row = {}
-                for row_idx, row in enumerate(keys_df.iter_rows(named=True)):
-                    key_to_row[tuple(row[k] for k in self.key_cols)] = row_idx
-                # Stream all rows (still one collect but on selected columns)
-                # NOTE: polars streaming for complex joins/pivot is limited; we iterate after collect of essential cols only
-                rows_df = df_with_class.select(self.key_cols + [self.race_col, '_class_idx']).collect()
-                for r in rows_df.iter_rows(named=True):
-                    voter_key = tuple(r[k] for k in self.key_cols)
-                    ridx = race_index_map[r[self.race_col]]
-                    row_idx = key_to_row[voter_key]
-                    data_mm[row_idx, ridx] = r['_class_idx']
-                    mask_mm[row_idx, ridx] = 1.0
-                # Convert memmaps to tensors (memory stays on disk until accessed)
-                self.data_tensor = torch.from_numpy(np.asarray(data_mm)).long()
-                self.mask_tensor = torch.from_numpy(np.asarray(mask_mm)).float()
-                self.index = keys_df.select(self.key_cols)
-                self.dataset = torch.utils.data.TensorDataset(self.data_tensor, self.mask_tensor)
-            else:
-                # Original in-memory pivot
-                df_collected = df_with_class.collect()
-                pivot = df_collected.pivot(
-                    values='_class_idx',
-                    index=self.key_cols,
-                    columns=self.race_col,
-                    aggregate_function='first'
-                )
-                race_cols = [col for col in pivot.columns if col not in self.key_cols]
-                ordered_race_cols = [r for r in self.idx_to_race if r in race_cols]
-                pivot = pivot.select(self.key_cols + ordered_race_cols)
-                race_data_cols = ordered_race_cols
-                mask = pivot.select([
-                    pl.col(col).is_not_null().cast(pl.Float32).alias(col) 
-                    for col in race_data_cols
-                ])
-                pivot_filled = pivot.select(
-                    self.key_cols + [
-                        pl.col(col).fill_null(0).cast(pl.Int64).alias(col)
-                        for col in race_data_cols
-                    ]
-                )
-                data_array = pivot_filled.select(race_data_cols).to_numpy()
-                mask_array = mask.to_numpy()
-                self.data_tensor = torch.from_numpy(data_array).long()
-                self.mask_tensor = torch.from_numpy(mask_array).float()
+                # Write numpy arrays directly to memmap files
+                data_mm = np.memmap(data_path, dtype=self.data_dtype, mode='w+', shape=(n_voters, n_races))
+                mask_mm = np.memmap(mask_path, dtype=self.mask_dtype, mode='w+', shape=(n_voters, n_races))
+                data_mm[:] = pivot_filled.select(race_data_cols).to_numpy().astype(self.data_dtype)
+                mask_mm[:] = mask.to_numpy().astype(self.mask_dtype)
+                data_mm.flush()
+                mask_mm.flush()
+                # Load as tensors from memmap backing
+                self.data_tensor = torch.from_numpy(np.array(data_mm, copy=False)).long()
+                self.mask_tensor = torch.from_numpy(np.array(mask_mm, copy=False))
                 self.index = pivot_filled.select(self.key_cols)
-                self.dataset = torch.utils.data.TensorDataset(self.data_tensor, self.mask_tensor)
+            else:
+                # Pure in-memory
+                data_array = pivot_filled.select(race_data_cols).to_numpy().astype(self.data_dtype)
+                mask_array = mask.to_numpy().astype(self.mask_dtype)
+                self.data_tensor = torch.from_numpy(data_array).long()
+                self.mask_tensor = torch.from_numpy(mask_array)
+                self.index = pivot_filled.select(self.key_cols)
+            
+            self.dataset = torch.utils.data.TensorDataset(self.data_tensor, self.mask_tensor)
         else:
             # Sparse representation: store triplets (row, race_idx, class_idx) and build dense batch on-the-fly
             import numpy as np
@@ -515,9 +502,11 @@ class VAEDataModule(L.LightningDataModule):
                         m[item] = 1.0
                     return x, m
             self.dataset = SparseVotesDataset(triplets_arr, n_voters, self.nitems)
-            # set dummy tensors for compatibility if needed
+            # Set dummy tensors for compatibility
             self.data_tensor = None
             self.mask_tensor = None
+            print(f"Sparse mode: {len(triplets)} non-zero entries for {n_voters} voters x {self.nitems} races")
+            print(f"Memory savings: ~{100*(1 - len(triplets)/(n_voters*self.nitems)):.1f}% vs dense")
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True, drop_last=False, num_workers=8)
