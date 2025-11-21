@@ -232,3 +232,4 @@ po/*~
 rsconnect/
 /lightning_logs
 /checkpoints
+/memmaps
