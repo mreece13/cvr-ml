@@ -15,3 +15,9 @@ a |>
     join_by(state, county_name, cvr_id)
   ) |> 
   write_parquet(here("data/all_sample.parquet"))
+
+bind_rows(
+  a,
+  read_parquet(here("data/colorado.parquet"))
+) |> 
+  write_parquet(here("data/combined.parquet"))
