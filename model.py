@@ -378,15 +378,37 @@ class VAEDataModule(L.LightningDataModule):
     def setup(self, stage=None):
         df_lazy = pl.scan_parquet(self.filepath)
 
-        # Get race mappings
-        races = sorted(df_lazy.select(self.race_col).unique().collect()[self.race_col].to_list())
+        # ------------------------------------------------------------------
+        # Detect exact duplicate rows (same voter key + race + candidate).
+        # Identify races containing any such duplicates and drop them.
+        # ------------------------------------------------------------------
+        duplicate_key_cols = self.key_cols + [self.race_col, self.candidate_col]
+        dup_rows_lazy = df_lazy.filter(pl.struct(duplicate_key_cols).is_duplicated())
+        dup_races_df = dup_rows_lazy.select(self.race_col).unique()
+        dup_races_list = dup_races_df.collect()[self.race_col].to_list() if dup_races_df.fetch(1).height > 0 else []
+
+        self.dropped_races = dup_races_list
+        if len(dup_races_list) > 0:
+            # Materialize and save duplicate rows and dropped race list for later inspection
+            dup_rows = dup_rows_lazy.collect()
+            dup_rows.write_csv('duplicate_entries.csv')
+            pl.DataFrame({self.race_col: dup_races_list}).write_csv('dropped_races.csv')
+            print(f"Dropping {len(dup_races_list)} races with duplicate rows. Saved 'duplicate_entries.csv' and 'dropped_races.csv'.")
+            # Filter out problematic races entirely
+            df_lazy_filtered = df_lazy.filter(~pl.col(self.race_col).is_in(dup_races_list))
+        else:
+            df_lazy_filtered = df_lazy
+            print("No duplicate races detected; proceeding with full dataset.")
+
+        # Get race mappings AFTER filtering
+        races = sorted(df_lazy_filtered.select(self.race_col).unique().collect()[self.race_col].to_list())
         self.race_to_idx = {r: i for i, r in enumerate(races)}
         self.idx_to_race = races
         self.nitems = len(races)
 
         # Build per-race candidate mappings (collect grouped data efficiently)
         race_candidates = (
-            df_lazy
+            df_lazy_filtered
             .group_by(self.race_col)
             .agg(pl.col(self.candidate_col).unique().sort())
             .sort(self.race_col)
@@ -415,26 +437,10 @@ class VAEDataModule(L.LightningDataModule):
 
         # Join lazily - query optimization happens here
         df_with_class = (
-            df_lazy
+            df_lazy_filtered
             .join(mapping_df, on=[self.race_col, self.candidate_col], how='left')
             .with_columns(pl.col('_class_idx').fill_null(0))
         )
-
-        # Check for duplicates (collect only duplicate check)
-        index_cols = self.key_cols + [self.race_col]
-        duplicates = (
-            df_with_class
-            .filter(pl.struct(index_cols).is_duplicated())
-            .collect()
-        )
-
-        if len(duplicates) > 0:
-            unique_dup_keys = duplicates.select(index_cols).unique().sort(index_cols)
-            print(f"\nWARNING: Found {len(duplicates)} duplicate entries!")
-            print(f"Unique duplicate keys:\n")
-            print(unique_dup_keys.head(50))
-            duplicates.write_csv('duplicate_entries.csv')
-            print(f"Full duplicates saved to: duplicate_entries.csv\n")
 
         if self.representation == 'dense':
             # Standard pivot path - fast but requires 2x memory peak
