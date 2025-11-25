@@ -2,10 +2,10 @@
 
 # Job Flags
 #SBATCH -p mit_normal_gpu
-#SBATCH -c 16
+#SBATCH -c 32
 #SBATCH --mem=500G
-#SBATCH --gres=gpu:h200:1
-#SBATCH --time=06:00:00
+#SBATCH --gres=gpu:h200:2
+#SBATCH --time=5:59:00
 #SBATCH --signal=SIGUSR1@360
 
 # Set up environment
@@ -26,7 +26,7 @@ trap 'handle_timeout' SIGUSR1
 # Run your application
 set -e  # Exit on first error
 
-srun python main_lightning.py --data data/all_sample.parquet --batch-size=512 --latent-dims 1
+srun python main_lightning.py --data data/combined_sample.parquet --batch-size=512 --latent-dims 1
 
 # If we get here, training completed successfully
 echo "Training completed successfully!"
