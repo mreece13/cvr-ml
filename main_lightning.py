@@ -28,6 +28,7 @@ def main():
     args_dict = {k: v for k, v in vars(args).items() if k in ['data', 'batch_size', 'latent_dims', 'hidden_size', 'emb_dim']}
     file_name_parts = []
     for k, v in args_dict.items():
+        v = v.replace('data/', '') if k == 'data' else v
         file_name_parts.append(f"{k}{v}")
     file_name = "_".join(file_name_parts)
 
