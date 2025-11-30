@@ -11,8 +11,8 @@ from model import CVAE, VAEDataModule
 # ============================================================================
 # CONFIGURATION - Update these paths
 # ============================================================================
-CHECKPOINT_PATH = '/Users/mason/Dropbox (MIT)/Research/cvr-ml/lightning_logs/version_0/checkpoints/last.ckpt'
-DATA_PATH = 'data/colorado2.parquet'  # Path to your data file
+CHECKPOINT_PATH = 'lightning_logs/lightning_logs/datacombined_sample.parquet_batch_size512_latent_dims4_hidden_size64_emb_dim16/checkpoints/last.ckpt'
+DATA_PATH = 'data/combined_sample.parquet'  # Path to your data file
 OUTPUT_DIR = "embedding_analysis"
 
 # ============================================================================
