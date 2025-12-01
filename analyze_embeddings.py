@@ -334,6 +334,8 @@ def main():
                        help='Path to data file (required to load datamodule)')
     parser.add_argument('--batch-size', type=int, default=512,
                        help='Batch size for datamodule (only used if creating new datamodule)')
+    parser.add_argument('--representation', type=str, default='sparse', choices=['dense', 'sparse'],
+                       help='Data representation mode (default: sparse, recommended for large datasets)')
     parser.add_argument('--output-dir', type=str, default='embedding_analysis', 
                        help='Directory to save analysis outputs')
     parser.add_argument('--race', type=str, default=None, 
@@ -352,33 +354,56 @@ def main():
     print(f"Loading checkpoint: {args.checkpoint}")
     checkpoint = torch.load(args.checkpoint, map_location='cpu', weights_only=False)
     
+    # Extract hyperparameters from checkpoint
+    hparams = checkpoint.get('hyper_parameters', {}) if isinstance(checkpoint, dict) else {}
+    
+    # Auto-detect representation mode from checkpoint, fallback to command line arg
+    representation_mode = hparams.get('representation', args.representation)
+    print(f"Using representation mode: {representation_mode}")
+    
     # Create datamodule - we need the data file to rebuild it
     if not args.data:
         raise ValueError("Please provide --data argument with path to data file.")
     
     print(f"Creating datamodule from file: {args.data}")
-    datamodule = VAEDataModule(filepath=args.data, batch_size=args.batch_size)
+    datamodule = VAEDataModule(
+        filepath=args.data, 
+        batch_size=args.batch_size,
+        representation=representation_mode
+    )
     datamodule.prepare_data()
     datamodule.setup()
     print(f"Datamodule loaded with {datamodule.nitems} races")
+    if hasattr(datamodule, 'dropped_races') and len(datamodule.dropped_races) > 0:
+        print(f"  Note: {len(datamodule.dropped_races)} races with duplicates were dropped")
     
-    # Inspect hparams for info and load model letting hparams come from ckpt
-    hparams = checkpoint.get('hyper_parameters', {}) if isinstance(checkpoint, dict) else {}
+    # Display hyperparameters from checkpoint
     if hparams:
-        print("Hyperparameters from checkpoint:")
+        print("\nHyperparameters from checkpoint:")
+        latent_dims = hparams.get('latent_dims', 2)
+        hidden_layer_size = hparams.get('hidden_layer_size', 64)
+        encoder_emb_dim = hparams.get('encoder_emb_dim', 16)
         for k in [
             'latent_dims', 'hidden_layer_size', 'encoder_emb_dim', 'n_samples', 'beta', 'learning_rate', 'batch_size', 'nitems'
         ]:
             if k in hparams:
                 print(f"  - {k}: {hparams[k]}")
         if 'nitems' in hparams and hparams['nitems'] != datamodule.nitems:
-            print(f"WARNING: ckpt nitems={hparams['nitems']} differs from current data nitems={datamodule.nitems}")
+            print(f"  WARNING: ckpt nitems={hparams['nitems']} differs from current data nitems={datamodule.nitems}")
+    else:
+        # Fallback defaults if no hparams found
+        latent_dims = 2
+        hidden_layer_size = 64
+        encoder_emb_dim = 16
 
     model = CVAE.load_from_checkpoint(
         args.checkpoint, 
         map_location='cpu',
         nitems=datamodule.nitems,
-        n_classes_per_item=datamodule.n_classes_per_item
+        n_classes_per_item=datamodule.n_classes_per_item,
+        latent_dims=latent_dims,
+        hidden_layer_size=hidden_layer_size,
+        encoder_emb_dim=encoder_emb_dim
     )
     model.eval()
     print("Model loaded successfully")

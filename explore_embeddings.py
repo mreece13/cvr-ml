@@ -14,6 +14,7 @@ from model import CVAE, VAEDataModule
 CHECKPOINT_PATH = 'lightning_logs/lightning_logs/datacombined_sample.parquet_batch_size512_latent_dims4_hidden_size64_emb_dim16/checkpoints/last.ckpt'
 DATA_PATH = 'data/combined_sample.parquet'  # Path to your data file
 OUTPUT_DIR = "embedding_analysis"
+REPRESENTATION = 'sparse'  # 'dense' or 'sparse' - sparse is recommended for large datasets
 
 # ============================================================================
 # Load Model and DataModule
@@ -21,23 +22,46 @@ OUTPUT_DIR = "embedding_analysis"
 print("Loading checkpoint...")
 checkpoint = torch.load(CHECKPOINT_PATH, map_location='cpu', weights_only=False)
 
+# Try to detect representation mode from checkpoint hyperparameters
+hparams = checkpoint.get('hyper_parameters', {})
+representation_mode = hparams.get('representation', REPRESENTATION)
+print(f"Using representation mode: {representation_mode}")
+
 print(f"Creating datamodule from file: {DATA_PATH}")
-datamodule = VAEDataModule(filepath=DATA_PATH, batch_size=512)
+datamodule = VAEDataModule(
+    filepath=DATA_PATH, 
+    batch_size=512,
+    representation=representation_mode
+)
 datamodule.prepare_data()
 datamodule.setup()
 print(f"✓ Datamodule loaded with {datamodule.nitems} races")
+if hasattr(datamodule, 'dropped_races') and len(datamodule.dropped_races) > 0:
+    print(f"  Note: {len(datamodule.dropped_races)} races with duplicates were dropped")
+
+# Auto-detect model hyperparameters from checkpoint
+latent_dims = hparams.get('latent_dims', 2)
+hidden_layer_size = hparams.get('hidden_layer_size', 64)
+encoder_emb_dim = hparams.get('encoder_emb_dim', 16)
+learning_rate = hparams.get('learning_rate', 1e-3)
+batch_size = hparams.get('batch_size', 512)
+
+print(f"Detected hyperparameters:")
+print(f"  latent_dims: {latent_dims}")
+print(f"  hidden_layer_size: {hidden_layer_size}")
+print(f"  encoder_emb_dim: {encoder_emb_dim}")
 
 model = CVAE.load_from_checkpoint(
     CHECKPOINT_PATH, 
     map_location='cpu',
-    dataloader=None, 
     nitems=datamodule.nitems,
     n_classes_per_item=datamodule.n_classes_per_item, 
-    latent_dims=2, 
-    hidden_layer_size=64, 
+    latent_dims=latent_dims, 
+    hidden_layer_size=hidden_layer_size,
+    encoder_emb_dim=encoder_emb_dim,
     qm=None, 
-    learning_rate=1e-3, 
-    batch_size=512
+    learning_rate=learning_rate, 
+    batch_size=batch_size
 )
 model.eval()
 print("✓ Model loaded")

@@ -87,8 +87,6 @@ def main():
         )
         
         print("---------- Fitting ----------")
-        # save a checkpoint with a custom name using `file_name`
-        # trainer.fit(model, ckpt_path = "checkpoints/" + file_name + "_last.ckpt", datamodule = dm)
         trainer.fit(model, ckpt_path = "last", datamodule = dm)
     
     # Build deterministic eval dataloader from the DataModule
