@@ -35,96 +35,65 @@ compare = readxl::read_excel("metadata/compare.xlsx", sheet = "by-county") |>
   filter(release == 1) |> 
   select(state, county_name)
 
-# small_cands_co = open_dataset("~/Dropbox (MIT)/Research/cvrs/data/pass3") |>
-#   filter(
-#     state == "COLORADO",
-#     magnitude == 1,
-#     !(office %in% c("SUPREME COURT", "COURT OF APPEALS", "COUNTY JUDGE", "DISTRICT COURT")),
-#     candidate != "WRITEIN"
-#   ) |> 
-#   mutate(
-#     race = paste(office, district, sep = "_")
-#   ) |> 
-#   count(race, candidate) |> 
-#   filter(n <= 50)
+base_co = open_dataset("~/orcd/pool/supercloud-cvrs/data/pass3") |> 
+  filter(
+    magnitude == 1,
+    !str_detect(candidate, regex("undervote|overvote|writein", ignore_case = TRUE))
+  ) |> 
+  semi_join(compare, join_by(state, county_name)) |>
+  mutate(
+    race = paste(office, district, sep = "_")
+  )
 
-small_cands = open_dataset("~/orcd/pool/supercloud-cvrs/data/pass2") |> 
+base = open_dataset("~/orcd/pool/supercloud-cvrs/data/pass2") |> 
   filter(
     state != "COLORADO",
     magnitude == 1,
-    !(office %in% c("SUPREME COURT", "COURT OF APPEALS", "COUNTY JUDGE", "DISTRICT COURT") & candidate %in% c("YES", "NO")),
-    candidate != "WRITEIN"
+    !str_detect(candidate, regex("undervote|overvote|writein", ignore_case = TRUE))
   ) |> 
+  semi_join(compare, join_by(state, county_name)) |>
   mutate(
     race = paste(office, district, sep = "_")
-  ) |> 
-  count(race, candidate) |> 
-  filter(n <= 50)
+  )
 
-# uncontested_co = open_dataset("~/Dropbox (MIT)/Research/cvrs/data/pass3") |>
-#   filter(
-#     state == "COLORADO",
-#     magnitude == 1,
-#     !(office %in% c("SUPREME COURT", "COURT OF APPEALS", "COUNTY JUDGE", "DISTRICT COURT")),
-#     candidate != "WRITEIN"
-#   ) |> 
-#   mutate(
-#     race = paste(office, district, sep = "_")
-#   ) |> 
-#   distinct(race, candidate) |> 
-#   collect() |> 
-#   filter(n() == 1, .by = race)
+small_cands_co = count(base_co, race, candidate) |> filter(n <= 50)
+small_cands = count(base, race, candidate) |> filter(n <= 50)
 
-uncontested = open_dataset("~/orcd/pool/supercloud-cvrs/data/pass2") |>
-  filter(
-    state != "COLORADO",
-    magnitude == 1,
-    !(office %in% c("SUPREME COURT", "COURT OF APPEALS", "COUNTY JUDGE", "DISTRICT COURT") & candidate %in% c("YES", "NO")),
-    candidate != "WRITEIN"
-  ) |> 
-  mutate(
-    race = paste(office, district, sep = "_")
-  ) |> 
+uncontested_co = base_co 
   distinct(race, candidate) |> 
   collect() |> 
   filter(n() == 1, .by = race)
 
-# open_dataset("~/Dropbox (MIT)/Research/cvrs/data/pass3") |>
-#   filter(
-#     state == "COLORADO",
-#     (magnitude == 1 | is.na(magnitude)),
-#     !(office %in% c("SUPREME COURT", "COURT OF APPEALS", "COUNTY JUDGE", "DISTRICT COURT")),
-#     candidate != "WRITEIN"
-#   ) |> 
-#   mutate(
-#     race = paste(office, district, sep = "_")
-#   ) |> 
-#   select(state, county_name, cvr_id, race, office, district, candidate, magnitude) |>
-#   semi_join(compare, join_by(state, county_name)) |> 
-#   anti_join(small_cands_co, join_by(race, candidate)) |> 
-#   anti_join(uncontested_co, join_by(race, candidate)) |> 
-#   mutate(
-#     state = str_to_lower(state),
-#     county_name = str_to_lower(county_name),
-#     candidate = str_to_lower(candidate),
-#     race = str_to_lower(race),
-#     office = str_to_lower(office),
-#     district = str_to_lower(district)
-#   ) |> 
-#   left_join(newmeta, join_by(state, office == office.old, district == district.old, candidate == candidate.old)) |> 
-#   mutate(
-#     magnitude = as.integer(magnitude.y),
-#     race = paste(office.new, district.new, sep = "_")
-#   ) |> 
-#   select(state, county_name, cvr_id, race, candidate = candidate.new, magnitude) |> 
-#   distinct() |> 
-#   filter(
-#     magnitude == 1 | is.na(magnitude), candidate != "writein"
-#   ) |> 
-#   write_parquet(here("data/colorado.parquet"))
+uncontested = base |> 
+  distinct(race, candidate) |> 
+  collect() |> 
+  filter(n() == 1, .by = race)
 
-open_dataset("~/orcd/pool/supercloud-cvrs/data/pass2") |>
-  semi_join(compare, join_by(state, county_name)) |>
+base_co |> 
+  select(state, county_name, precinct, cvr_id, race, office, district, candidate, magnitude) |>
+  anti_join(small_cands_co, join_by(race, candidate)) |> 
+  anti_join(uncontested_co, join_by(race, candidate)) |> 
+  mutate(
+    state = str_to_lower(state),
+    county_name = str_to_lower(county_name),
+    candidate = str_to_lower(candidate),
+    race = str_to_lower(race),
+    office = str_to_lower(office),
+    district = str_to_lower(district)
+  ) |> 
+  left_join(newmeta, join_by(state, office == office.old, district == district.old, candidate == candidate.old)) |> 
+  mutate(
+    magnitude = as.integer(magnitude.y),
+    race = paste(office.new, district.new, sep = "_")
+  ) |> 
+  select(state, county_name, precinct, cvr_id, race, candidate = candidate.new, magnitude) |> 
+  distinct() |> 
+  filter(
+    magnitude == 1 | is.na(magnitude), candidate != "writein"
+  ) |> 
+  write_parquet(here("data/colorado.parquet"))
+
+base |>
   mutate(
     magnitude = as.integer(magnitude)
   ) |> 
@@ -137,7 +106,7 @@ open_dataset("~/orcd/pool/supercloud-cvrs/data/pass2") |>
   mutate(
     race = paste(office, district, sep = "_")
   ) |> 
-  select(state, county_name, cvr_id, race, office, district, candidate, magnitude) |> 
+  select(state, county_name, precinct, cvr_id, race, office, district, candidate, magnitude) |> 
   anti_join(small_cands, join_by(race, candidate)) |> 
   anti_join(uncontested, join_by(race, candidate)) |> 
   mutate(
@@ -153,12 +122,13 @@ open_dataset("~/orcd/pool/supercloud-cvrs/data/pass2") |>
     magnitude = as.integer(magnitude.y),
     race = paste(office.new, district.new, sep = "_")
   ) |> 
-  select(state, county_name, cvr_id, race, candidate = candidate.new, magnitude) |> 
+  select(state, county_name, precinct, cvr_id, race, candidate = candidate.new, magnitude) |> 
   filter(
     magnitude == 1 | is.na(magnitude), candidate != "writein"
   ) |> 
   write_parquet("data/all.parquet")
 
+#### archive
 ## create new metadata file
 
 # c_meta = open_dataset("~/Dropbox (MIT)/Research/cvrs/data/pass3") |>
