@@ -1,9 +1,8 @@
-rm(list=ls())
-gc()
-
-library(tidyverse)
-library(arrow)
-library(here)
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(arrow)
+  library(here)
+})
 
 a = bind_rows(
   read_parquet(here("data/all.parquet")),

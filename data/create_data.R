@@ -1,8 +1,8 @@
-rm(list=ls())
-gc()
-
-library(tidyverse)
-library(arrow)
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(arrow)
+  library(here)
+})
 
 ######
 # create test file for VAE implementation
