@@ -1,0 +1,118 @@
+---
+title: "Even Faster Ideal Point Estimation"
+subtitle: "Using Variational Autoencoders for Item Response Theory"
+embed-resources: true
+bibliography: "references.bib"
+suppress-bibliography: true
+author: Mason Reece
+institute: MIT
+echo: false
+date: today
+format:
+  revealjs:
+    theme: [default, clean.scss]
+    smaller: true
+    progress: false
+    slide-number: c
+    footer: "VAEs for IRT"
+    fig-cap-location: bottom
+    fig-responsive: true
+    incremental: true
+    include-after-body: nofooter_titlepage.html
+    menu:
+        side: left
+    date-format: long
+---
+
+## Project Overview
+
+Researchers with [discrete]{.alert} data (parliamentary votes, campaign websites, survey responses) often want to estimate [latent]{.alert} traits (ideology, policy positions, personality)
+
+. . .
+
+One common choice is Item Response Theory (IRT), a parametric approach
+
+-   Estimation of IRT models is computationally expensive; speedups exist but are still infeasible for very large datasets (think: millions of observations) or complex models (e.g., multiple latent dimensions)
+-   I introduce [Variational Autoencoders (VAEs)]{.alert} for estimating IRT models to political science, a connection previously developed in psychology and computer science
+
+## Item-Response Theory
+### Basics
+
+The canonical "2-parameter" IRT model: $$\pi_{ij} = Pr(y_{ij} = c | \alpha_i, \gamma_{j}, \beta_{j}) = F(\underbrace{\alpha_i}_{\text{Ideal Point}} \cdot \underbrace{\gamma_{j}}_{\text{Discrimination}} - \underbrace{\beta_{j}}_{\text{Difficulty}}),$$ where $F(\cdot)$ is a monotone mapping function (e.g., inverse logit or softmax), $i$ indexes respondents and $j$ indexes questions. Multiple dimensions are also supported.
+
+::: {.fragment}
+Construct a likelihood: $\mathcal{L} = \prod_{i=1}^N \prod_{j=1}^J \pi_{ij}^{y_{ij}}(1-\pi_{ij}^{1-y_{ij}})$, a prior for the latent traits $f(\alpha_i) \sim \mathcal{N}(0, 1),$ and solve for the posterior: $f(\alpha | y) \propto \mathcal{L_i} f(\alpha_i)$
+:::
+
+## Item-Response Theory
+### Estimation Approaches
+
+Current standards in political science:
+
+- Bayesian MCMC [@jackman_bayesian_2009]
+- EM Algorithm: Closed form for certain models [@imai_fast_2016; @peress_large-scale_2022]
+- Variational Inference: Instead of directly optimizing the marginal log-likelihood, estimate a simpler function $\hat g(\cdot)$ for each posterior $f(\alpha | y)$ [@grimmer_introduction_2011]
+
+::: {.fragment}
+My proposal from psychometrics and computer science:
+
+- Variational Autoencoder: Instead of estimating a [separate]{.alert} $\hat g(\cdot)$ for each individual, estimate a [single, flexible model]{.alert} that predicts the posterior distribution for an individual given their responses [@curi_interpretable_2019]
+:::
+
+## Variational Autoencoders
+### Some Details
+
+Instead of estimating a [separate]{.alert} $\hat g(\cdot)$ for each individual, estimate a [single, flexible model]{.alert} that predicts the posterior distribution for an individual given their responses.
+
+::: {.fragment}
+We model latent traits $\alpha_i \sim \text{MVN}(\mu_i, \sigma_i)$ where $(\mu_i, \sigma_i) = \text{NeuralNet}_\mathbf{\phi} (\mathbf{y}_i)$
+:::
+
+::: {.fragment}
+Combining them together yields a Variational Autoencoder [@kingma_auto-encoding_2014], a kind of structured neural network model. Parameters are estimated by: 
+
+\begin{align*}
+  \left( \hat{\mathbf{\phi}}, \hat \gamma, \hat \beta \right) &= \underset{\mathbf{\phi}, \gamma, \beta}{argmax} \left( \mathbb{E}\left[ \log(p(\mathbf{y}_i | \hat \alpha_i ; \gamma_j ; \beta_j)) \right] - \text{KL}\left[ g(\alpha_i | \mathbf{y}_i; \mathbf{\phi}) ||\ f(\alpha_i | \mathbf{y}_i;) \right] \right) \\
+  &= argmax \text{Evidence Lower Bound (ELBO)}
+\end{align*}
+:::
+
+## Variational Autoencoders
+### Model Diagram
+
+![](images/vae_diagram.png)
+
+## Variational Autoencoders
+### Missing Data
+
+Missing data is common in IRT applications (e.g., legislators don't vote on every bill, survey respondents skip questions, voters don't cast a ballot in every contest)
+
+-  VAEs and machine learning models in general don't handle missing data naturally
+-  Passing a "mask" explicitly to the model is better than dropping, imputing along the way, or a mix of approaches [@veldkamp_handling_2025]
+
+## Variational Autoencoders
+### Computation
+
+Bespoke model built in PyTorch, then fit for N epochs on MIT's Engaging Cluster until satisfactory convergence was reached
+
+-  About 1h30m for 1m voters x 5000 contests x 4 dimensions
+-  Probably a couple months as Bayesian MCMC, a couple weeks with Variational Inference, and infeasible with EM
+
+## Example Usage
+### Candidate-Agnostic Ideological Scores
+
+![](images/us_house_latent_dim0.png)
+
+## Example Usage
+### Uncontested District Attorney Contests in Colorado
+
+![](images/uncontested_coda.jpg)
+
+## Example Usage
+### Ballot Questions in Colorado
+
+![](images/prop4d_loadings.jpg)
+
+# Thank you!
+
+Mason Reece \| [mpreece\@mit.edu]()
