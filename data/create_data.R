@@ -14,12 +14,12 @@ suppressPackageStartupMessages({
 #   col_types = "cicccccci"
 # )
 
-newmeta = read_csv("metadata/newmeta.csv") |> 
+newmeta = read_csv("metadata/newmeta.csv", show_col_types = FALSE) |> 
   group_by(contest_id, candidate_id) |> 
   fill(party, magnitude, .direction = "downup") |> 
   ungroup() |> 
   right_join(
-    read_csv("metadata/newmeta_pass0.csv") |> 
+    read_csv("metadata/newmeta_pass0.csv", show_col_types = FALSE) |> 
       select(election, state, contest_id, candidate_id, office, district, candidate), 
     join_by(election, state, contest_id, candidate_id),
     suffix = c(".new", ".old")
