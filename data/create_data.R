@@ -59,7 +59,7 @@ base = open_dataset("~/orcd/pool/supercloud-cvrs/data/pass2") |>
 small_cands_co = count(base_co, race, candidate) |> filter(n <= 50)
 small_cands = count(base, race, candidate) |> filter(n <= 50)
 
-uncontested_co = base_co 
+uncontested_co = base_co |> 
   distinct(race, candidate) |> 
   collect() |> 
   filter(n() == 1, .by = race)
@@ -77,7 +77,6 @@ base_co |>
     state = str_to_lower(state),
     county_name = str_to_lower(county_name),
     candidate = str_to_lower(candidate),
-    race = str_to_lower(race),
     office = str_to_lower(office),
     district = str_to_lower(district)
   ) |> 
@@ -94,18 +93,6 @@ base_co |>
   write_parquet(here("data/colorado.parquet"))
 
 base |>
-  mutate(
-    magnitude = as.integer(magnitude)
-  ) |> 
-  filter(
-    state != "COLORADO", county_name != "MARICOPA",
-    (magnitude == 1 | is.na(magnitude)),
-    !(office %in% c("SUPREME COURT", "COURT OF APPEALS", "COUNTY JUDGE", "DISTRICT COURT") & candidate %in% c("YES", "NO", "UNDERVOTE", "OVERVOTE")),
-    candidate != "WRITEIN"
-  ) |> 
-  mutate(
-    race = paste(office, district, sep = "_")
-  ) |> 
   select(state, county_name, precinct, cvr_id, race, office, district, candidate, magnitude) |> 
   anti_join(small_cands, join_by(race, candidate)) |> 
   anti_join(uncontested, join_by(race, candidate)) |> 
@@ -113,7 +100,6 @@ base |>
     state = str_to_lower(state),
     county_name = str_to_lower(county_name),
     candidate = str_to_lower(candidate),
-    race = str_to_lower(race),
     office = str_to_lower(office),
     district = str_to_lower(district)
   ) |> 
