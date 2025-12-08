@@ -309,7 +309,7 @@ class CVAE(L.LightningModule):
         
         # calculate KL divergence
         log_q_theta_x = torch.distributions.Normal(mu, sigma.exp()).log_prob(z).sum(dim = -1, keepdim = True) # log q(Theta|X)
-        log_p_theta = torch.distributions.Normal(torch.zeros_like(z).to(input), scale=torch.ones(mu.shape[2]).to(input)).log_prob(z).sum(dim = -1, keepdim = True) # log p(Theta)
+        log_p_theta = torch.distributions.Normal(torch.zeros_like(z).to(input), torch.ones_like(z).to(input)).log_prob(z).sum(dim = -1, keepdim = True) # log p(Theta)
         kl =  log_q_theta_x - log_p_theta # kl divergence
 
         # combine into ELBO
@@ -519,7 +519,7 @@ class VAEDataModule(L.LightningDataModule):
             print(f"Memory savings: ~{100*(1 - len(triplets)/(n_voters*self.nitems)):.1f}% vs dense")
 
     def train_dataloader(self):
-        return torch.utils.data.DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True, drop_last=False, num_workers=8)
+        return torch.utils.data.DataLoader(self.dataset, batch_size=self.batch_size, shuffle=True, drop_last=False, num_workers=6, persistent_workers=True)
     
     def test_dataloader(self):
         """
