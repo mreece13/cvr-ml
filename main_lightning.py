@@ -10,6 +10,8 @@ from lightning.pytorch.plugins.environments import SLURMEnvironment
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lightning.pytorch.loggers import CSVLogger
+import time
+from datetime import timedelta
 
 def main():
     parser = argparse.ArgumentParser(description='Train CVAE on ballot data')
@@ -72,7 +74,7 @@ def main():
 
     print("---------- Building Trainer ----------")
     if not args.eval_only:
-        # os.makedirs('checkpoints/' + file_name + "/", exist_ok=True)
+        start_time = time.time()
 
         logger = CSVLogger(version = file_name, save_dir = "lightning_logs")
 
@@ -81,13 +83,18 @@ def main():
             accelerator='auto', 
             devices='auto',
             logger = logger,
-            # default_root_dir='checkpoints/' + file_name + "/",
             callbacks=[checkpoint_callback, stopping_callback],
             plugins=[SLURMEnvironment(auto_requeue=False)]
         )
         
         print("---------- Fitting ----------")
         trainer.fit(model, ckpt_path = "last", datamodule = dm)
+
+        elapsed_time = time.time() - start_time
+        elapsed_str = str(timedelta(seconds=int(elapsed_time)))
+        print(f"\n{'='*60}")
+        print(f"Training execution time: {elapsed_str}")
+        print(f"{'='*60}")
     
     # Build deterministic eval dataloader from the DataModule
     eval_dl = dm.test_dataloader()
