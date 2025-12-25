@@ -1,45 +1,83 @@
 #!/bin/bash
 
-# Hyperparameter Tuning Job Submitter
-# Reads hyperparam-grid.txt and submits a job for each line
+# Hyperparameter Tuning Job Submitter using SLURM Array Jobs
+# Distributes hyperparam-grid.txt across array tasks
 
-GRID_FILE="hyperparam-grid.txt"
-LOG_DIR="hyperparam_logs"
+# SLURM Job Flags
+#SBATCH -p mit_normal_gpu
+#SBATCH -c 32
+#SBATCH --mem=500G
+#SBATCH --gres=gpu:h200:2
+#SBATCH --time=5:59:00
+#SBATCH --signal=SIGUSR1@360
+#SBATCH -o hyperparam_logs/slurm-%A-%a.out
+#SBATCH -a 1-5
+#SBATCH --job-name=vae_hyperparam
 
-# Create log directory
-mkdir -p $LOG_DIR
+# Set up environment
+module load miniforge/24.3.0-0
+module load cuda/12.4.0
 
-# Counter for jobs
-job_count=0
-job_ids=()
+mamba activate cvr-ml
 
-# Read the grid file and submit jobs (skip comment lines)
-while read -r line; do
-    # Skip empty lines and comments
-    [[ -z "$line" || "$line" =~ ^# ]] && continue
+# Function to handle timeout signal
+handle_timeout() {
+    echo "Job received timeout signal - will be resubmitted"
+    exit 124
+}
+
+# Trap the timeout signal
+trap 'handle_timeout' SIGUSR1
+
+echo "My SLURM_ARRAY_TASK_ID: " $SLURM_ARRAY_TASK_ID
+echo "Number of Tasks: " $SLURM_ARRAY_TASK_COUNT
+
+# Specify Input File
+INPUT_FILE=hyperparam-grid.txt
+
+# Count only non-comment, non-empty lines
+NUM_LINES=$(grep -v '^#' $INPUT_FILE | grep -v '^[[:space:]]*$' | wc -l)
+
+echo "Total hyperparameter combinations: " $NUM_LINES
+
+# Distribute line numbers across array tasks
+MY_LINE_NUMS=( $(seq $SLURM_ARRAY_TASK_ID $SLURM_ARRAY_TASK_COUNT $NUM_LINES) )
+
+echo "This task will process ${#MY_LINE_NUMS[@]} combinations"
+
+# Iterate over assigned line numbers
+for LINE_IDX in "${MY_LINE_NUMS[@]}"; do
+    
+    # Get the LINE_IDX-th non-comment line from INPUT_FILE
+    INPUT="$(grep -v '^#' $INPUT_FILE | grep -v '^[[:space:]]*$' | sed "${LINE_IDX}q;d")"
     
     # Parse hyperparameters
-    read -r batch_size hidden_size emb_dim lr n_samples <<< "$line"
+    read -r batch_size hidden_size emb_dim lr n_samples <<< "$INPUT"
     
-    job_count=$((job_count + 1))
+    echo "========================================"
+    echo "Processing combination $LINE_IDX:"
+    echo "  batch-size: $batch_size"
+    echo "  hidden-size: $hidden_size"
+    echo "  emb-dim: $emb_dim"
+    echo "  lr: $lr"
+    echo "  n-samples: $n_samples"
+    echo "========================================"
     
-    # Submit the job with hyperparameters as arguments
-    jobid=$(sbatch --parsable \
-        --output="${LOG_DIR}/slurm-%j_bs${batch_size}_hs${hidden_size}_ed${emb_dim}_lr${lr}_ns${n_samples}.out" \
-        --job-name="cvr_bs${batch_size}_hs${hidden_size}_ed${emb_dim}" \
-        scheduler.sh $batch_size $hidden_size $emb_dim $lr $n_samples)
+    # Run training with these hyperparameters
+    set -e
+    srun python main_lightning.py \
+        --data data/combined_sample.parquet \
+        --batch-size=$batch_size \
+        --latent-dims=2 \
+        --hidden-size=$hidden_size \
+        --emb-dim=$emb_dim \
+        --lr=$lr \
+        --epochs=20 \
+        --n-samples=$n_samples
     
-    job_ids+=($jobid)
-    
-    echo "Submitted job $job_count (ID: $jobid): bs=$batch_size hs=$hidden_size ed=$emb_dim lr=$lr ns=$n_samples"
-    
-done < "$GRID_FILE"
+    echo "Completed combination $LINE_IDX"
+    echo ""
+done
 
-echo ""
-echo "========================================"
-echo "Submitted $job_count hyperparameter tuning jobs"
-echo "Job IDs: ${job_ids[@]}"
-echo "========================================"
-echo ""
-echo "To monitor jobs, use: squeue -u \$USER"
-echo "Logs will be saved to: $LOG_DIR/"
+echo "Task $SLURM_ARRAY_TASK_ID completed all assigned combinations!"
+exit 0
