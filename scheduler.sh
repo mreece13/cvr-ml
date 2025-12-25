@@ -23,10 +23,25 @@ handle_timeout() {
 # Trap the timeout signal
 trap 'handle_timeout' SIGUSR1
 
+# Parse command line arguments
+BATCH_SIZE=${1:-512}
+HIDDEN_SIZE=${2:-64}
+EMB_DIM=${3:-16}
+LR=${4:-1e-3}
+N_SAMPLES=${5:-1}
+
 # Run your application
 set -e  # Exit on first error
 
-srun python main_lightning.py --data data/combined_sample.parquet --batch-size=512 --latent-dims 1
+srun python main_lightning.py \
+    --data data/combined_sample.parquet \
+    --batch-size=$BATCH_SIZE \
+    --latent-dims=2 \
+    --hidden-size=$HIDDEN_SIZE \
+    --emb-dim=$EMB_DIM \
+    --lr=$LR \
+    --epochs=20 \
+    --n-samples=$N_SAMPLES
 
 # If we get here, training completed successfully
 echo "Training completed successfully!"
