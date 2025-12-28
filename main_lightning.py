@@ -26,12 +26,21 @@ def main():
     parser.add_argument('--eval-only', type=bool, default=False)
     args = parser.parse_args()
 
-    # Build a file name using only `batch-size`, `latent-dims`, `hidden-size`, `emb-dim`
-    args_dict = {k: v for k, v in vars(args).items() if k in ['data', 'batch_size', 'latent_dims', 'hidden_size', 'emb_dim']}
-    file_name_parts = []
-    for k, v in args_dict.items():
-        v = v.replace('data/', '') if k == 'data' else v
-        file_name_parts.append(f"{k}{v}")
+    # Build a deterministic file name including lr (with '.' removed) and n-samples
+    # Use ordering: data, batch_size, latent_dims, hidden_size, emb_dim, lr{slug}, n_samples{val}
+    data_token = f"data{args.data.replace('data/', '')}"
+    # Format lr as decimal, trim trailing zeros/dot, then remove the decimal point
+    lr_str = f"{args.lr:.10f}".rstrip('0').rstrip('.')
+    lr_slug = lr_str.replace('.', '')
+    file_name_parts = [
+        data_token,
+        f"batch_size{args.batch_size}",
+        f"latent_dims{args.latent_dims}",
+        f"hidden_size{args.hidden_size}",
+        f"emb_dim{args.emb_dim}",
+        f"lr{lr_slug}",
+        f"n_samples{args.n_samples}",
+    ]
     file_name = "_".join(file_name_parts)
 
     print(f"Generated file name: {file_name}")

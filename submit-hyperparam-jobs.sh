@@ -1,83 +1,58 @@
 #!/bin/bash
 
-# Hyperparameter Tuning Job Submitter using SLURM Array Jobs
-# Distributes hyperparam-grid.txt across array tasks
+# Resume-aware Hyperparameter Job Submitter
+# Reads hyperparam-grid.txt and submits only unfinished combos
 
-# SLURM Job Flags
-#SBATCH -p mit_normal_gpu
-#SBATCH -c 32
-#SBATCH --mem=500G
-#SBATCH --gres=gpu:h200:2
-#SBATCH --time=5:59:00
-#SBATCH --signal=SIGUSR1@360
-#SBATCH -o hyperparam_logs/slurm-%A-%a.out
-#SBATCH -a 1-5
-#SBATCH --job-name=vae_hyperparam
+GRID_FILE="hyperparam-grid.txt"
+LOG_DIR="hyperparam_logs"
+MAX_SUBMITS=${MAX_SUBMITS:-50}
 
-# Set up environment
-module load miniforge/24.3.0-0
-module load cuda/12.4.0
+mkdir -p "$LOG_DIR"
 
-mamba activate cvr-ml
+submitted=0
 
-# Function to handle timeout signal
-handle_timeout() {
-    echo "Job received timeout signal - will be resubmitted"
-    exit 124
-}
+# Read grid and submit pending combinations
+while read -r line; do
+    # Skip comments and blank lines
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
 
-# Trap the timeout signal
-trap 'handle_timeout' SIGUSR1
+    # Parse hyperparameters: batch_size hidden_size emb_dim lr n_samples
+    read -r batch_size hidden_size emb_dim lr n_samples <<< "$line"
 
-echo "My SLURM_ARRAY_TASK_ID: " $SLURM_ARRAY_TASK_ID
-echo "Number of Tasks: " $SLURM_ARRAY_TASK_COUNT
+    # Compute lr_slug to match Python naming: decimal -> trim zeros/dot -> remove dot
+    lr_decimal=$(awk -v v="$lr" 'BEGIN{printf("%.10f", v)}')
+    lr_trim=$(echo "$lr_decimal" | sed -E 's/0+$//; s/\.$//')
+    [[ -z "$lr_trim" ]] && lr_trim="$lr_decimal"
+    lr_slug=${lr_trim//./}
 
-# Specify Input File
-INPUT_FILE=hyperparam-grid.txt
+    # Build file_name identical to main_lightning.py
+    data_token="datacombined_sample.parquet"
+    file_name="${data_token}_batch_size${batch_size}_latent_dims2_hidden_size${hidden_size}_emb_dim${emb_dim}_lr${lr_slug}_n_samples${n_samples}"
 
-# Count only non-comment, non-empty lines
-NUM_LINES=$(grep -v '^#' $INPUT_FILE | grep -v '^[[:space:]]*$' | wc -l)
+    # Completion check: require all key outputs
+    vl="outputs/${file_name}_voter_latents.csv"
+    ip="outputs/${file_name}_item_parameters.csv"
+    vs="outputs/${file_name}_voter_scores.csv"
 
-echo "Total hyperparameter combinations: " $NUM_LINES
+    if [[ -f "$vl" && -f "$ip" && -f "$vs" ]]; then
+        echo "Completed: skip bs=${batch_size} hs=${hidden_size} ed=${emb_dim} lr=${lr} ns=${n_samples}"
+        continue
+    fi
 
-# Distribute line numbers across array tasks
-MY_LINE_NUMS=( $(seq $SLURM_ARRAY_TASK_ID $SLURM_ARRAY_TASK_COUNT $NUM_LINES) )
+    # Respect submission cap
+    if (( submitted >= MAX_SUBMITS )); then
+        echo "Reached cap MAX_SUBMITS=$MAX_SUBMITS; stopping submissions."
+        break
+    fi
 
-echo "This task will process ${#MY_LINE_NUMS[@]} combinations"
+    # Submit the job
+    jobid=$(sbatch --parsable \
+        --output="${LOG_DIR}/slurm-%j_bs${batch_size}_hs${hidden_size}_ed${emb_dim}_lr${lr_slug}_ns${n_samples}.out" \
+        --job-name="cvr_bs${batch_size}_hs${hidden_size}_ed${emb_dim}" \
+        scheduler.sh "$batch_size" "$hidden_size" "$emb_dim" "$lr" "$n_samples")
 
-# Iterate over assigned line numbers
-for LINE_IDX in "${MY_LINE_NUMS[@]}"; do
-    
-    # Get the LINE_IDX-th non-comment line from INPUT_FILE
-    INPUT="$(grep -v '^#' $INPUT_FILE | grep -v '^[[:space:]]*$' | sed "${LINE_IDX}q;d")"
-    
-    # Parse hyperparameters
-    read -r batch_size hidden_size emb_dim lr n_samples <<< "$INPUT"
-    
-    echo "========================================"
-    echo "Processing combination $LINE_IDX:"
-    echo "  batch-size: $batch_size"
-    echo "  hidden-size: $hidden_size"
-    echo "  emb-dim: $emb_dim"
-    echo "  lr: $lr"
-    echo "  n-samples: $n_samples"
-    echo "========================================"
-    
-    # Run training with these hyperparameters
-    set -e
-    srun python main_lightning.py \
-        --data data/combined_sample.parquet \
-        --batch-size=$batch_size \
-        --latent-dims=2 \
-        --hidden-size=$hidden_size \
-        --emb-dim=$emb_dim \
-        --lr=$lr \
-        --epochs=20 \
-        --n-samples=$n_samples
-    
-    echo "Completed combination $LINE_IDX"
-    echo ""
-done
+    echo "Submitted job (ID: $jobid): bs=$batch_size hs=$hidden_size ed=$emb_dim lr=$lr ns=$n_samples"
+    submitted=$((submitted+1))
+done < "$GRID_FILE"
 
-echo "Task $SLURM_ARRAY_TASK_ID completed all assigned combinations!"
-exit 0
+echo "Total submitted: $submitted"
