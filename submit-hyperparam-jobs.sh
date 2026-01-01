@@ -9,7 +9,7 @@ MAX_SUBMITS=${MAX_SUBMITS:-50}
 
 mkdir -p "$LOG_DIR"
 
-submitted=0
+total_jobs=$(( $(squeue --me | wc -l) - 1 ))
 
 # Read grid and submit pending combinations
 while read -r line; do
@@ -40,7 +40,7 @@ while read -r line; do
     fi
 
     # Respect submission cap
-    if (( submitted >= MAX_SUBMITS )); then
+    if (( total_jobs >= MAX_SUBMITS)); then
         echo "Reached cap MAX_SUBMITS=$MAX_SUBMITS; stopping submissions."
         break
     fi
@@ -52,7 +52,5 @@ while read -r line; do
         scheduler.sh "$batch_size" "$hidden_size" "$emb_dim" "$lr" "$n_samples")
 
     echo "Submitted job (ID: $jobid): bs=$batch_size hs=$hidden_size ed=$emb_dim lr=$lr ns=$n_samples"
-    submitted=$((submitted+1))
+    total_jobs=$(( $(squeue --me | wc -l) - 1 ))
 done < "$GRID_FILE"
-
-echo "Total submitted: $submitted"
