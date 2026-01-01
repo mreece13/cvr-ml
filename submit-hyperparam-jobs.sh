@@ -7,6 +7,10 @@ GRID_FILE="hyperparam-grid.txt"
 LOG_DIR="hyperparam_logs"
 MAX_SUBMITS=${MAX_SUBMITS:-50}
 
+# Optional positional args: data path and latent dims
+DATA_PATH=${1:-"data/combined_sample.parquet"}
+LATENT_DIMS=${2:-2}
+
 mkdir -p "$LOG_DIR"
 
 total_jobs=$(( $(squeue --me | wc -l) - 1 ))
@@ -26,8 +30,8 @@ while read -r line; do
     lr_slug=${lr_trim//./}
 
     # Build file_name identical to main_lightning.py
-    data_token="datacombined_sample.parquet"
-    file_name="${data_token}_batch_size${batch_size}_latent_dims2_hidden_size${hidden_size}_emb_dim${emb_dim}_lr${lr_slug}_n_samples${n_samples}"
+    data_token="data${DATA_PATH#data/}"
+    file_name="${data_token}_batch_size${batch_size}_latent_dims${LATENT_DIMS}_hidden_size${hidden_size}_emb_dim${emb_dim}_lr${lr_slug}_n_samples${n_samples}"
 
     # Completion check: require all key outputs
     vl="outputs/${file_name}_voter_latents.csv"
@@ -47,9 +51,9 @@ while read -r line; do
 
     # Submit the job
     jobid=$(sbatch --parsable \
-        --output="${LOG_DIR}/slurm-%j_bs${batch_size}_hs${hidden_size}_ed${emb_dim}_lr${lr_slug}_ns${n_samples}.out" \
-        --job-name="cvr_bs${batch_size}_hs${hidden_size}_ed${emb_dim}" \
-        scheduler.sh "$batch_size" "$hidden_size" "$emb_dim" "$lr" "$n_samples")
+        --output="${LOG_DIR}/slurm-%j_bs${batch_size}_hs${hidden_size}_ed${emb_dim}_ld${LATENT_DIMS}_lr${lr_slug}_ns${n_samples}.out" \
+        --job-name="cvr_bs${batch_size}_hs${hidden_size}_ed${emb_dim}_ld${LATENT_DIMS}" \
+        scheduler.sh "$batch_size" "$hidden_size" "$emb_dim" "$lr" "$n_samples" "$DATA_PATH" "$LATENT_DIMS")
 
     echo "Submitted job (ID: $jobid): bs=$batch_size hs=$hidden_size ed=$emb_dim lr=$lr ns=$n_samples"
     total_jobs=$(( $(squeue --me | wc -l) - 1 ))

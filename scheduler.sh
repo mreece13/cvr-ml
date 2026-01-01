@@ -29,14 +29,16 @@ HIDDEN_SIZE=${2:-64}
 EMB_DIM=${3:-16}
 LR=${4:-1e-3}
 N_SAMPLES=${5:-1}
+DATA_PATH=${6:-"data/combined_sample.parquet"}
+LATENT_DIMS=${7:-2}
 
 # Run your application
 set -e  # Exit on first error
 
 srun python main_lightning.py \
-    --data data/combined_sample.parquet \
+    --data="$DATA_PATH" \
     --batch-size=$BATCH_SIZE \
-    --latent-dims=2 \
+    --latent-dims=$LATENT_DIMS \
     --hidden-size=$HIDDEN_SIZE \
     --emb-dim=$EMB_DIM \
     --lr=$LR \
