@@ -14,6 +14,8 @@ LATENT_DIMS=${2:-2}
 mkdir -p "$LOG_DIR"
 
 total_jobs=$(( $(squeue --me | wc -l) - 1 ))
+submitted_new_jobs=0
+hit_cap=0
 
 # Read grid and submit pending combinations
 while read -r line; do
@@ -46,6 +48,7 @@ while read -r line; do
     # Respect submission cap
     if (( total_jobs >= MAX_SUBMITS)); then
         echo "Reached cap MAX_SUBMITS=$MAX_SUBMITS; stopping submissions."
+        hit_cap=1
         break
     fi
 
@@ -56,5 +59,16 @@ while read -r line; do
         scheduler.sh "$batch_size" "$hidden_size" "$emb_dim" "$lr" "$n_samples" "$DATA_PATH" "$LATENT_DIMS")
 
     echo "Submitted job (ID: $jobid): bs=$batch_size hs=$hidden_size ed=$emb_dim lr=$lr ns=$n_samples"
+    submitted_new_jobs=1
     total_jobs=$(( $(squeue --me | wc -l) - 1 ))
 done < "$GRID_FILE"
+
+# If we hit the cap and submitted new jobs, resubmit this script with low priority
+# to continue the wave when jobs complete
+if (( hit_cap && submitted_new_jobs )); then
+    echo "Resubmitting script with low priority for next wave..."
+    sbatch --priority=-1000000 \
+        --output="${LOG_DIR}/slurm-chain-%j.out" \
+        --job-name="cvr_chain_submit" \
+        submit-hyperparam-jobs.sh "$DATA_PATH" "$LATENT_DIMS"
+fi
