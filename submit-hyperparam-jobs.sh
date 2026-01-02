@@ -67,8 +67,7 @@ done < "$GRID_FILE"
 # to continue the wave when jobs complete
 if (( hit_cap && submitted_new_jobs )); then
     echo "Resubmitting script with low priority for next wave..."
-    sbatch --priority=-1000000 \
-        --output="${LOG_DIR}/slurm-chain-%j.out" \
+    sbatch --output="${LOG_DIR}/slurm-chain-%j.out" \
         --job-name="cvr_chain_submit" \
         submit-hyperparam-jobs.sh "$DATA_PATH" "$LATENT_DIMS"
 fi
